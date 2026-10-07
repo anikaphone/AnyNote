@@ -25,11 +25,15 @@ std::string BuildDefaultWelcomeRtf() {
     rtf += "{\\colortbl ;\\red246\\green248\\blue250;\\red225\\green228\\blue232;\\red36\\green41\\blue47;\\red0\\green92\\blue197;\\red215\\green58\\blue73;\\red3\\green47\\blue98;\\red106\\green115\\blue125;\\red0\\green92\\blue197;\\red111\\green66\\blue193;\\red3\\green102\\blue214;}";
     rtf += "\\viewkind4\\uc1";
     rtf += "\\pard\\b\\fs28\\cf4 " + WideToRtf(L"欢迎使用 AnyNote - 基于 C++20 与原生 Win32 的分层树状笔记！") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf3\\b " + WideToRtf(L"★ 特性高光：") + "\\b0\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生富文本内核") + "\\b0 " + WideToRtf(L"：采用 Windows MSFTEDIT.DLL (RichEdit 5.0)，毫秒启动，极低内存；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"剪贴板图片直接粘贴") + "\\b0 " + WideToRtf(L"：按 Win+Shift+S 截图，在编辑器中按 ") + "\\b Ctrl+V\\b0 " + WideToRtf(L" 即可直接粘贴截图；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生代码框 (CodeBox)") + "\\b0 " + WideToRtf(L"：点击上方「代码块」或按 ") + "\\b Ctrl+K\\b0 " + WideToRtf(L"，支持多语言高亮、卡片底色与 Consolas 等宽排版；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"单文件安全持久化") + "\\b0 " + WideToRtf(L"：静态集成 SQLite3MC，支持 AES-256 全库透明加密。") + "\\par\\par";
+    rtf += "\\cf3\\b " + WideToRtf(L"★ 核心特性与架构高光：") + "\\b0\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"多笔记本库管理 (Multi-Vault)") + "\\b0 " + WideToRtf(L"：左侧树顶部切换栏，支持多库即时切换、新建与统一管理，原生 INI 绿色存储；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"目录树拖拽重排 (Drag & Drop)") + "\\b0 " + WideToRtf(L"：鼠标按住左侧笔记节点即可拖拽，自由调整同级排序与父子层级关系；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生表格排版与编辑 (Tables)") + "\\b0 " + WideToRtf(L"：按 ") + "\\b Ctrl+Shift+T\\b0 " + WideToRtf(L" 快速插入 3×2 表格，光标置于表格内右键即可增删行与列；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"全库多维搜索与浮动查找") + "\\b0 " + WideToRtf(L"：按 ") + "\\b Ctrl+Shift+F\\b0 " + WideToRtf(L" 呼出底部全库全文检索窗格，按 ") + "\\b Ctrl+F / Ctrl+H\\b0 " + WideToRtf(L" 唤起浮动查找替换；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生富文本内核 (RichEdit 5.0)") + "\\b0 " + WideToRtf(L"：毫秒级疾速启动，极低内存，支持 1~4 级标题、粗体、斜体、列表等；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"剪贴板图片直接粘贴") + "\\b0 " + WideToRtf(L"：按 Win+Shift+S 截图，在编辑器中直接按 ") + "\\b Ctrl+V\\b0 " + WideToRtf(L" 即可粘贴截图图片；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生代码框 (CodeBox)") + "\\b0 " + WideToRtf(L"：按 ") + "\\b Ctrl+K\\b0 " + WideToRtf(L" 插入多语言语法高亮卡片与 Consolas 等宽排版；") + "\\par";
+    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"工业级安全持久化") + "\\b0 " + WideToRtf(L"：基于 SQLite3MC 存储，支持 AES-256 全库透明加密。") + "\\par\\par";
     rtf += "\\pard\\cf3 " + WideToRtf(L"下方即为原生嵌入的代码块示例：") + "\\par\\par";
 
     // 嵌入示例代码卡片
@@ -58,12 +62,15 @@ std::string BuildDefaultQuickStartRtf() {
     rtf += "{\\colortbl ;\\red0\\green92\\blue197;\\red36\\green41\\blue47;}";
     rtf += "\\viewkind4\\uc1";
     rtf += "\\pard\\b\\fs26\\cf1 " + WideToRtf(L"【快速上手指南】") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf2 " + WideToRtf(L"1. 在左侧树形目录中右键或使用菜单添加同级或子笔记；") + "\\par";
-    rtf += WideToRtf(L"2. 点击上方工具栏按钮或使用快捷键进行加粗 (Ctrl+B)、斜体 (Ctrl+I)、下划线 (Ctrl+U)；") + "\\par";
-    rtf += WideToRtf(L"3. 在顶部格式栏下拉框中可一键设置 1~4 级标题，亦可使用快捷键 Ctrl+1 ~ Ctrl+4；") + "\\par";
-    rtf += WideToRtf(L"4. 按 Ctrl+K 或点击「插入」->「插入代码块」，弹出代码框配置窗口，选择语言即可一键插入高亮代码块；") + "\\par";
-    rtf += WideToRtf(L"5. 任意复制微信/QQ/系统截图 (Win+Shift+S)，在右侧编辑器中直接按 Ctrl+V 即可粘贴图片；") + "\\par";
-    rtf += WideToRtf(L"6. 所有修改自动保存到 SQLite 数据库文件中，关闭软件数据不丢失。") + "\\par";
+    rtf += "\\cf2 " + WideToRtf(L"1. 多库切换：点击左侧目录树顶部的「📚 库名称 ▾」，可即时切换不同笔记库，或新建/管理笔记库；") + "\\par";
+    rtf += WideToRtf(L"2. 笔记管理：在左侧树中右键添加同级笔记 (Ctrl+N) 或子笔记 (Ctrl+Shift+N)，按 F2 重命名，Del 删除；") + "\\par";
+    rtf += WideToRtf(L"3. 拖拽排序：鼠标左键按住任意目录节点，直接拖动即可调整前后顺序或拖入其他节点成为子笔记；") + "\\par";
+    rtf += WideToRtf(L"4. 格式排版：点击上方工具栏进行加粗 (Ctrl+B)、斜体 (Ctrl+I)、下划线 (Ctrl+U)、删除线及 1~4 级标题 (Ctrl+1~4)；") + "\\par";
+    rtf += WideToRtf(L"5. 插入表格：按 Ctrl+Shift+T 插入 3×2 表格，光标置于单元格内右键可快捷增删行/列或删除表格；") + "\\par";
+    rtf += WideToRtf(L"6. 插入代码块：按 Ctrl+K 弹出代码框对话框，选择语言即可插入高亮代码卡片；") + "\\par";
+    rtf += WideToRtf(L"7. 粘贴图片：截屏 (Win+Shift+S) 或复制任意图片后，在右侧编辑器直接按 Ctrl+V 即可粘贴；") + "\\par";
+    rtf += WideToRtf(L"8. 查找与全库搜索：按 Ctrl+F 唤起浮动查找框，按 Ctrl+Shift+F 打开底部全库搜索窗格快速定位；") + "\\par";
+    rtf += WideToRtf(L"9. 安全加密：点击顶部菜单「安全」->「设置/修改笔记本密码」，即可为整库启用 AES-256 加密保护。") + "\\par";
     rtf += "}";
     return rtf;
 }
@@ -74,18 +81,31 @@ std::string BuildDefaultFeaturesRtf() {
     rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}}";
     rtf += "{\\colortbl ;\\red0\\green92\\blue197;\\red36\\green41\\blue47;\\red106\\green115\\blue125;}";
     rtf += "\\viewkind4\\uc1";
-    rtf += "\\pard\\b\\fs26\\cf1 " + WideToRtf(L"【特性与常用快捷键】") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf2\\b " + WideToRtf(L"• 目录与笔记管理：") + "\\b0\\par";
+    rtf += "\\pard\\b\\fs26\\cf1 " + WideToRtf(L"【特性与常用快捷键清单】") + "\\b0\\fs22\\par\\par";
+    rtf += "\\cf2\\b " + WideToRtf(L"• 笔记本库与树节点：") + "\\b0\\par";
+    rtf += WideToRtf(L"  - 📚 顶栏切换栏 : 点击快速切换、新建、打开或管理多库") + "\\par";
     rtf += WideToRtf(L"  - Ctrl+N : 新建同级笔记") + "\\par";
     rtf += WideToRtf(L"  - Ctrl+Shift+N : 新建子笔记") + "\\par";
     rtf += WideToRtf(L"  - F2 : 重命名选中笔记") + "\\par";
-    rtf += WideToRtf(L"  - Del : 删除选中笔记（仅当焦点在左侧树列表时有效）") + "\\par";
-    rtf += WideToRtf(L"  - Ctrl+S : 立即保存当前笔记") + "\\par\\par";
-    rtf += "\\b " + WideToRtf(L"• 编辑与排版：") + "\\b0\\par";
-    rtf += WideToRtf(L"  - Ctrl+0 ~ 4 : 正文与 1~4 级标题切换") + "\\par";
+    rtf += WideToRtf(L"  - Del : 删除选中笔记（焦点在目录树时）") + "\\par";
+    rtf += WideToRtf(L"  - 鼠标拖拽 : 自由重排节点顺序与移动层级") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+S : 保存当前笔记到数据库") + "\\par\\par";
+    rtf += "\\b " + WideToRtf(L"• 文本排版与插入：") + "\\b0\\par";
+    rtf += WideToRtf(L"  - Ctrl+0 : 恢复正文样式") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+1 ~ 4 : 切换 1~4 级标题") + "\\par";
     rtf += WideToRtf(L"  - Ctrl+B / Ctrl+I / Ctrl+U : 粗体 / 斜体 / 下划线") + "\\par";
-    rtf += WideToRtf(L"  - Ctrl+K : 插入代码块") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+Shift+T : 插入原生表格 (3×2)") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+K : 插入多语言高亮代码块") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+V : 粘贴文本或剪贴板截图图片") + "\\par\\par";
+    rtf += "\\b " + WideToRtf(L"• 查找与全库搜索：") + "\\b0\\par";
+    rtf += WideToRtf(L"  - Ctrl+F : 打开查找对话框") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+H : 打开替换对话框") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+M : 打开标记对话框") + "\\par";
+    rtf += WideToRtf(L"  - F3 / Shift+F3 : 查找下一个 / 上一个") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+Shift+F : 打开/关闭全库搜索窗格") + "\\par\\par";
+    rtf += "\\b " + WideToRtf(L"• 编辑与通用：") + "\\b0\\par";
     rtf += WideToRtf(L"  - Ctrl+Z / Ctrl+Y : 撤销 / 重做") + "\\par";
+    rtf += WideToRtf(L"  - Ctrl+A : 全选正文") + "\\par";
     rtf += "}";
     return rtf;
 }
@@ -173,13 +193,17 @@ std::string BuildDefaultTodoRtf() {
     rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}}";
     rtf += "{\\colortbl ;\\red0\\green92\\blue197;\\red36\\green41\\blue47;}";
     rtf += "\\viewkind4\\uc1";
-    rtf += "\\pard\\b\\fs26\\cf1 " + WideToRtf(L"【今日计划与待办事项】") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf2 " + WideToRtf(L"[√] 搭建原生 Win32 + C++20 工程骨架") + "\\par";
-    rtf += WideToRtf(L"[√] 集成 RichEdit 5.0 富文本与多语言高亮代码框") + "\\par";
-    rtf += WideToRtf(L"[√] 集成 1~4 级标题层级系统") + "\\par";
-    rtf += WideToRtf(L"[√] 集成 SQLite3MC 数据库持久化存储与 AES-256 加密") + "\\par";
-    rtf += WideToRtf(L"[ ] 目录树节点拖拽移动与重排 (Drag & Drop)") + "\\par";
-    rtf += WideToRtf(L"[ ] 全文检索与笔记搜索") + "\\par";
+    rtf += "\\pard\\b\\fs26\\cf1 " + WideToRtf(L"【AnyNote 核心能力与功能全貌】") + "\\b0\\fs22\\par\\par";
+    rtf += "\\cf2 " + WideToRtf(L"[√] 现代 C++20 + 原生 Win32 骨架与 Per-Monitor V2 DPI 动态感知") + "\\par";
+    rtf += WideToRtf(L"[√] RichEdit 5.0 原生富文本内核与 1~4 级标题层级系统") + "\\par";
+    rtf += WideToRtf(L"[√] 嵌入式多语言代码块卡片与语法高亮 (CodeBox)") + "\\par";
+    rtf += WideToRtf(L"[√] 剪贴板图片原生 OLE 粘贴支持 (Win+Shift+S 截图直接 Ctrl+V)") + "\\par";
+    rtf += WideToRtf(L"[√] 3×2 原生表格插入与行/列快捷增删编辑 (Ctrl+Shift+T)") + "\\par";
+    rtf += WideToRtf(L"[√] 左侧目录树鼠标拖拽重排与父子层级移动 (Drag & Drop)") + "\\par";
+    rtf += WideToRtf(L"[√] 仿 Notepad++ 独立浮动查找/替换/标记对话框 (Ctrl+F / Ctrl+H)") + "\\par";
+    rtf += WideToRtf(L"[√] 全库笔记多维全文检索窗格 (Ctrl+Shift+F)") + "\\par";
+    rtf += WideToRtf(L"[√] SQLite3MC 单文件持久化存储与 AES-256 全库透明加密") + "\\par";
+    rtf += WideToRtf(L"[√] 绿色便携多笔记本库管理 (Multi-Vault) 与 Windows 原生 INI 配置") + "\\par";
     rtf += "}";
     return rtf;
 }
@@ -929,12 +953,12 @@ bool NoteRepository::CreateDefaultWelcomeNotes() {
     if (!m_db.IsOpen()) return false;
 
     int64_t root1 = CreateNote(0, L"📌 欢迎使用 AnyNote", 0, 0, BuildDefaultWelcomeRtf(),
-        L"欢迎使用 AnyNote - 基于 C++20 与原生 Win32 的分层树状笔记！\n特性高光：原生富文本内核、剪贴板图片直接粘贴、原生代码框、单文件安全存储。");
+        L"欢迎使用 AnyNote - 基于 C++20 与原生 Win32 的分层树状笔记！\n特性高光：多笔记本库管理、目录树拖拽重排、原生表格排版、全库多维搜索、原生富文本内核、剪贴板图片直接粘贴、原生代码框、AES-256 全库加密存储。");
     if (root1 > 0) {
         CreateNote(root1, L"🚀 快速上手指南", 0, 0, BuildDefaultQuickStartRtf(),
-            L"快速上手指南：1. 树形目录右键添加笔记；2. 工具栏加粗斜体；3. 1~4级标题；4. Ctrl+K 插入代码块；5. 截图直接 Ctrl+V 粘贴图片；6. SQLite 自动保存。");
+            L"快速上手指南：1. 顶部切换栏多库管理；2. 目录树右键与拖拽调整层级；3. 粗体斜体与 1~4 级标题；4. Ctrl+Shift+T 插入表格与行列操作；5. Ctrl+K 插入代码块；6. 截图直接 Ctrl+V 粘贴图片；7. Ctrl+Shift+F 全库全文搜索；8. SQLite 自动保存与 AES-256 加密。");
         CreateNote(root1, L"💡 特性与快捷键说明", 1, 0, BuildDefaultFeaturesRtf(),
-            L"特性与常用快捷键：Ctrl+N 新建笔记，Ctrl+Shift+N 新建子笔记，F2 重命名，Del 删除，Ctrl+S 保存，Ctrl+F 查找，Ctrl+Shift+F 全库搜索。");
+            L"特性与常用快捷键清单：Ctrl+N 新建笔记，Ctrl+Shift+N 新建子笔记，F2 重命名，Del 删除，拖拽重排，Ctrl+S 保存，Ctrl+Shift+T 插入表格，Ctrl+K 插入代码块，Ctrl+F 查找，Ctrl+H 替换，Ctrl+Shift+F 全库搜索。");
     }
 
     int64_t root2 = CreateNote(0, L"💻 开发与技术积累", 1, 0, "", L"现代软件工程架构设计与技术积累。");
@@ -942,15 +966,13 @@ bool NoteRepository::CreateDefaultWelcomeNotes() {
         CreateNote(root2, L"📘 现代 C++ 与 Win32 架构", 0, 0, BuildDefaultCppRtf(),
             L"现代 C++ 与 Win32 架构设计：GWLP_USERDATA 绑定，Per-Monitor V2 DPI 高分屏，全静态链接零第三方 DLL 依赖。");
         CreateNote(root2, L"🔒 SQLite3MC 数据库与安全", 1, 0, BuildDefaultSqliteRtf(),
-            L"SQLite3MC 数据库与安全机制：AES-256 全库透明加解密，nodes 树形表，node_contents 内容表。");
-        CreateNote(root2, L"🎨 RichEdit 富文本与代码块", 2, 0, BuildDefaultWelcomeRtf(),
-            L"RichEdit 富文本与代码块：Windows 原生 MSFTEDIT.DLL，多语言语法高亮卡片嵌入。");
+            L"SQLite3MC 数据库与安全机制：AES-256 全库透明加解密，nodes 树形表，node_contents 内容表，anynote.ini 原生便携配置。");
     }
 
     int64_t root3 = CreateNote(0, L"📝 随手记 / 待办", 2, 0, "", L"日常笔记与待办清单。");
     if (root3 > 0) {
         CreateNote(root3, L"计划清单", 0, 0, BuildDefaultTodoRtf(),
-            L"今日计划与待办事项：[√] Win32 骨架；[√] RichEdit 富文本；[√] 标题层级；[√] SQLite3MC 加密存储；[√] 目录树拖拽重排；[√] 全文与编辑器双模搜索。");
+            L"AnyNote 核心能力一览：[√] Win32 骨架；[√] RichEdit 富文本；[√] 标题层级；[√] 表格排版；[√] 代码框；[√] 目录树拖拽重排；[√] 全库多维搜索；[√] SQLite3MC 加密存储；[√] 多笔记本库 (Multi-Vault)。");
     }
 
     return true;

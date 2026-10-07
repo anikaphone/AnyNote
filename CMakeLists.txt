@@ -39,6 +39,8 @@ set(SOURCES
     src/ui/MainWindow.h
     src/storage/Database.cpp
     src/storage/Database.h
+    src/storage/VaultManager.cpp
+    src/storage/VaultManager.h
     src/storage/NoteModel.h
     src/storage/NoteRepository.cpp
     src/storage/NoteRepository.h
@@ -74,6 +76,8 @@ add_executable(test_storage
     tests/test_storage.cpp
     src/storage/Database.cpp
     src/storage/Database.h
+    src/storage/VaultManager.cpp
+    src/storage/VaultManager.h
     src/storage/NoteModel.h
     src/storage/NoteRepository.cpp
     src/storage/NoteRepository.h

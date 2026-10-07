@@ -29,7 +29,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPWSTR /*l
 
     // 3. 初始化 Windows 通用控件库 (Common Controls v6.0)
     INITCOMMONCONTROLSEX icex = {sizeof(INITCOMMONCONTROLSEX)};
-    icex.dwICC = ICC_WIN95_CLASSES | ICC_COOL_CLASSES | ICC_BAR_CLASSES;
+    icex.dwICC = ICC_WIN95_CLASSES | ICC_COOL_CLASSES | ICC_BAR_CLASSES | ICC_LISTVIEW_CLASSES;
     InitCommonControlsEx(&icex);
 
     // 4. RichEdit 5.0 内核在 RichEditView::Initialize 中按需加载

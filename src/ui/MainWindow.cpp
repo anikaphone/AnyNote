@@ -7,6 +7,8 @@
 #include <windowsx.h>
 #include <shlwapi.h>
 #include <commdlg.h>
+#include <shellapi.h>
+#include <filesystem>
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
@@ -231,6 +233,498 @@ INT_PTR CALLBACK SetPasswordDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
     return FALSE;
 }
 
+// ======================== 新建笔记本库对话框 ========================
+struct NewVaultContext {
+    storage::VaultManager* mgr = nullptr;
+    std::wstring name;
+    std::wstring path;
+    bool ok = false;
+};
+
+INT_PTR CALLBACK NewVaultDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_INITDIALOG: {
+        SetWindowLongPtrW(hDlg, DWLP_USER, lParam);
+        auto* pCtx = reinterpret_cast<NewVaultContext*>(lParam);
+        HWND hEditName = GetDlgItem(hDlg, IDC_NEW_VAULT_NAME);
+        HWND hEditPath = GetDlgItem(hDlg, IDC_NEW_VAULT_PATH);
+
+        std::wstring defaultName = L"我的笔记";
+        if (pCtx && pCtx->mgr) {
+            int counter = 1;
+            std::wstring candName = L"新笔记库";
+            while (std::filesystem::exists(pCtx->mgr->GenerateNewVaultPath(candName))) {
+                candName = L"新笔记库_" + std::to_wstring(++counter);
+            }
+            defaultName = candName;
+            std::wstring path = pCtx->mgr->GenerateNewVaultPath(defaultName);
+            SetWindowTextW(hEditPath, path.c_str());
+        }
+        SetWindowTextW(hEditName, defaultName.c_str());
+        SendMessageW(hEditName, EM_SETSEL, 0, -1);
+        SetFocus(hEditName);
+        return FALSE;
+    }
+
+    case WM_COMMAND: {
+        WORD id = LOWORD(wParam);
+        WORD code = HIWORD(wParam);
+
+        if (id == IDC_NEW_VAULT_NAME && code == EN_CHANGE) {
+            auto* pCtx = reinterpret_cast<NewVaultContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+            if (pCtx && pCtx->mgr) {
+                HWND hEditName = GetDlgItem(hDlg, IDC_NEW_VAULT_NAME);
+                int len = GetWindowTextLengthW(hEditName);
+                std::wstring name(len + 1, L'\0');
+                GetWindowTextW(hEditName, name.data(), len + 1);
+                name.resize(len);
+
+                std::wstring path = pCtx->mgr->GenerateNewVaultPath(name.empty() ? L"未命名" : name);
+                SetWindowTextW(GetDlgItem(hDlg, IDC_NEW_VAULT_PATH), path.c_str());
+            }
+            return TRUE;
+        }
+
+        if (id == IDOK) {
+            auto* pCtx = reinterpret_cast<NewVaultContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+            if (pCtx && pCtx->mgr) {
+                HWND hEditName = GetDlgItem(hDlg, IDC_NEW_VAULT_NAME);
+                int len = GetWindowTextLengthW(hEditName);
+                if (len <= 0) {
+                    MessageBoxW(hDlg, L"请输入有效的笔记本库名称！", L"提示", MB_OK | MB_ICONWARNING);
+                    SetFocus(hEditName);
+                    return TRUE;
+                }
+                std::wstring name(len + 1, L'\0');
+                GetWindowTextW(hEditName, name.data(), len + 1);
+                name.resize(len);
+
+                std::wstring path = pCtx->mgr->GenerateNewVaultPath(name);
+                if (std::filesystem::exists(path)) {
+                    if (MessageBoxW(hDlg, (L"该位置已存在笔记库文件：\r\n" + path + L"\r\n\r\n是否直接将该现有库加入列表并打开？").c_str(), L"文件已存在", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                        return TRUE;
+                    }
+                }
+
+                pCtx->name = std::move(name);
+                pCtx->path = std::move(path);
+                pCtx->ok = true;
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+
+        if (id == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+// ======================== 重命名笔记本库对话框 ========================
+struct RenameVaultContext {
+    std::wstring initialName;
+    std::wstring resultName;
+    bool ok = false;
+};
+
+INT_PTR CALLBACK RenameVaultDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_INITDIALOG: {
+        SetWindowLongPtrW(hDlg, DWLP_USER, lParam);
+        auto* pCtx = reinterpret_cast<RenameVaultContext*>(lParam);
+        HWND hEdit = GetDlgItem(hDlg, IDC_RENAME_VAULT_INPUT);
+        if (pCtx) {
+            SetWindowTextW(hEdit, pCtx->initialName.c_str());
+            SendMessageW(hEdit, EM_SETSEL, 0, -1);
+        }
+        SetFocus(hEdit);
+        return FALSE;
+    }
+
+    case WM_COMMAND: {
+        WORD id = LOWORD(wParam);
+        if (id == IDOK) {
+            auto* pCtx = reinterpret_cast<RenameVaultContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+            if (pCtx) {
+                HWND hEdit = GetDlgItem(hDlg, IDC_RENAME_VAULT_INPUT);
+                int len = GetWindowTextLengthW(hEdit);
+                if (len <= 0) {
+                    MessageBoxW(hDlg, L"库显示名称不能为空！", L"提示", MB_OK | MB_ICONWARNING);
+                    SetFocus(hEdit);
+                    return TRUE;
+                }
+                std::wstring name(len + 1, L'\0');
+                GetWindowTextW(hEdit, name.data(), len + 1);
+                name.resize(len);
+                pCtx->resultName = std::move(name);
+                pCtx->ok = true;
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        } else if (id == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+// ======================== 管理笔记本库对话框 ========================
+struct ManageVaultsContext {
+    storage::VaultManager* mgr = nullptr;
+    MainWindow* mainWindow = nullptr;
+    std::wstring selectedSwitchPath;
+    bool switchRequested = false;
+    bool listModified = false;
+};
+
+static void RefreshVaultList(HWND hDlg, ManageVaultsContext* pCtx) {
+    HWND hList = GetDlgItem(hDlg, IDC_VAULT_LIST);
+    ListView_DeleteAllItems(hList);
+    if (!pCtx || !pCtx->mgr) return;
+
+    const auto& vaults = pCtx->mgr->GetVaults();
+    std::wstring activePath = pCtx->mgr->GetActiveVaultPath();
+
+    for (int i = 0; i < static_cast<int>(vaults.size()); ++i) {
+        const auto& v = vaults[i];
+
+        std::wstring displayName = v.name;
+        if (_wcsicmp(v.path.c_str(), activePath.c_str()) == 0) {
+            displayName += L" (当前)";
+        }
+
+        LVITEMW item = {};
+        item.mask = LVIF_TEXT | LVIF_PARAM;
+        item.iItem = i;
+        item.iSubItem = 0;
+        item.pszText = const_cast<LPWSTR>(displayName.c_str());
+        item.lParam = static_cast<LPARAM>(i);
+        ListView_InsertItem(hList, &item);
+
+        std::wstring statusStr = L"正常";
+        std::wstring sizeStr = L"-";
+        std::error_code ec;
+        if (!std::filesystem::exists(v.path, ec)) {
+            statusStr = L"文件缺失";
+        } else {
+            auto fsize = std::filesystem::file_size(v.path, ec);
+            if (!ec) {
+                if (fsize < 1024) {
+                    sizeStr = std::to_wstring(fsize) + L" B";
+                } else if (fsize < 1024 * 1024) {
+                    sizeStr = std::to_wstring(fsize / 1024) + L" KB";
+                } else {
+                    double mb = static_cast<double>(fsize) / (1024.0 * 1024.0);
+                    wchar_t mbBuf[32];
+                    swprintf_s(mbBuf, L"%.2f MB", mb);
+                    sizeStr = mbBuf;
+                }
+            }
+        }
+        ListView_SetItemText(hList, i, 1, const_cast<LPWSTR>(statusStr.c_str()));
+        ListView_SetItemText(hList, i, 2, const_cast<LPWSTR>(sizeStr.c_str()));
+        ListView_SetItemText(hList, i, 3, const_cast<LPWSTR>(v.path.c_str()));
+
+        if (_wcsicmp(v.path.c_str(), activePath.c_str()) == 0) {
+            ListView_SetItemState(hList, i, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        }
+    }
+}
+
+INT_PTR CALLBACK ManageVaultsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_INITDIALOG: {
+        SetWindowLongPtrW(hDlg, DWLP_USER, lParam);
+        auto* pCtx = reinterpret_cast<ManageVaultsContext*>(lParam);
+
+        HWND hList = GetDlgItem(hDlg, IDC_VAULT_LIST);
+        ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
+
+        LVCOLUMNW col = {};
+        col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+
+        col.pszText = const_cast<LPWSTR>(L"库名称");
+        col.cx = 120;
+        col.iSubItem = 0;
+        ListView_InsertColumn(hList, 0, &col);
+
+        col.pszText = const_cast<LPWSTR>(L"状态");
+        col.cx = 65;
+        col.iSubItem = 1;
+        ListView_InsertColumn(hList, 1, &col);
+
+        col.pszText = const_cast<LPWSTR>(L"大小");
+        col.cx = 70;
+        col.iSubItem = 2;
+        ListView_InsertColumn(hList, 2, &col);
+
+        col.pszText = const_cast<LPWSTR>(L"存储路径");
+        col.cx = 240;
+        col.iSubItem = 3;
+        ListView_InsertColumn(hList, 3, &col);
+
+        RefreshVaultList(hDlg, pCtx);
+        return TRUE;
+    }
+
+    case WM_NOTIFY: {
+        auto* pNMHdr = reinterpret_cast<NMHDR*>(lParam);
+        if (pNMHdr->idFrom == IDC_VAULT_LIST && pNMHdr->code == NM_DBLCLK) {
+            SendMessageW(hDlg, WM_COMMAND, MAKEWPARAM(IDC_VAULT_BTN_SWITCH, BN_CLICKED), 0);
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_COMMAND: {
+        WORD id = LOWORD(wParam);
+        auto* pCtx = reinterpret_cast<ManageVaultsContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+        if (!pCtx || !pCtx->mgr) break;
+
+        HWND hList = GetDlgItem(hDlg, IDC_VAULT_LIST);
+        int sel = ListView_GetNextItem(hList, -1, LVNI_SELECTED);
+
+        if (id == IDC_VAULT_BTN_NEW) {
+            NewVaultContext nvCtx;
+            nvCtx.mgr = pCtx->mgr;
+            if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_NEW_VAULT), hDlg, NewVaultDialogProc, reinterpret_cast<LPARAM>(&nvCtx)) == IDOK && nvCtx.ok) {
+                std::error_code ec;
+                std::filesystem::create_directories(pCtx->mgr->GetNotebooksDir(), ec);
+                if (!std::filesystem::exists(nvCtx.path)) {
+                    storage::Database newDb;
+                    if (newDb.Open(nvCtx.path, "")) {
+                        storage::NoteRepository newRepo(newDb);
+                        newRepo.InitializeSchema();
+                        newDb.Close();
+                    }
+                }
+                pCtx->mgr->AddVault(nvCtx.name, nvCtx.path);
+                pCtx->listModified = true;
+                RefreshVaultList(hDlg, pCtx);
+            }
+            return TRUE;
+        }
+
+        if (id == IDC_VAULT_BTN_RENAME) {
+            if (sel < 0) {
+                MessageBoxW(hDlg, L"请先在列表中选中一个笔记本库！", L"提示", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            const auto* v = pCtx->mgr->GetVault(static_cast<size_t>(sel));
+            if (!v) return TRUE;
+
+            RenameVaultContext rvCtx;
+            rvCtx.initialName = v->name;
+            if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_RENAME_VAULT), hDlg, RenameVaultDialogProc, reinterpret_cast<LPARAM>(&rvCtx)) == IDOK && rvCtx.ok) {
+                pCtx->mgr->RenameVault(static_cast<size_t>(sel), rvCtx.resultName);
+                pCtx->listModified = true;
+                RefreshVaultList(hDlg, pCtx);
+            }
+            return TRUE;
+        }
+
+        if (id == IDC_VAULT_BTN_REMOVE) {
+            if (sel < 0) {
+                MessageBoxW(hDlg, L"请先在列表中选中一个笔记本库！", L"提示", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            if (pCtx->mgr->GetVaultCount() <= 1) {
+                MessageBoxW(hDlg, L"列表中仅剩最后一个笔记本库，不可移除！", L"提示", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            const auto* v = pCtx->mgr->GetVault(static_cast<size_t>(sel));
+            if (!v) return TRUE;
+
+            std::wstring prompt = L"确定从库列表中移除“" + v->name + L"”吗？\r\n\r\n（注意：这仅从列表中移除引用，不会删除磁盘上的数据库文件）";
+            if (MessageBoxW(hDlg, prompt.c_str(), L"确认移除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                if (_wcsicmp(v->path.c_str(), pCtx->mgr->GetActiveVaultPath().c_str()) == 0) {
+                    std::wstring fallbackPath;
+                    for (size_t i = 0; i < pCtx->mgr->GetVaultCount(); ++i) {
+                        if (i != static_cast<size_t>(sel)) {
+                            const auto* fallback = pCtx->mgr->GetVault(i);
+                            if (fallback) { fallbackPath = fallback->path; break; }
+                        }
+                    }
+                    if (!pCtx->mainWindow || fallbackPath.empty() || !pCtx->mainWindow->SwitchToVault(fallbackPath)) {
+                        MessageBoxW(hDlg, L"无法切换到其他笔记本库，当前库未移除。", L"切换失败", MB_OK | MB_ICONWARNING);
+                        return TRUE;
+                    }
+                }
+                pCtx->mgr->RemoveVault(static_cast<size_t>(sel));
+                pCtx->listModified = true;
+                RefreshVaultList(hDlg, pCtx);
+            }
+            return TRUE;
+        }
+
+        if (id == IDC_VAULT_BTN_EXPLORER) {
+            if (sel < 0) {
+                MessageBoxW(hDlg, L"请先在列表中选中一个笔记本库！", L"提示", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            const auto* v = pCtx->mgr->GetVault(static_cast<size_t>(sel));
+            if (!v) return TRUE;
+
+            if (std::filesystem::exists(v->path)) {
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", (L"/select,\"" + v->path + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+            } else if (std::filesystem::exists(pCtx->mgr->GetNotebooksDir())) {
+                ShellExecuteW(nullptr, L"open", L"explorer.exe", pCtx->mgr->GetNotebooksDir().c_str(), nullptr, SW_SHOWNORMAL);
+            } else {
+                MessageBoxW(hDlg, L"该笔记库文件在磁盘上不存在！", L"文件缺失", MB_OK | MB_ICONWARNING);
+            }
+            return TRUE;
+        }
+
+        if (id == IDC_VAULT_BTN_SWITCH) {
+            if (sel < 0) {
+                MessageBoxW(hDlg, L"请先在列表中选中一个笔记本库！", L"提示", MB_OK | MB_ICONINFORMATION);
+                return TRUE;
+            }
+            const auto* v = pCtx->mgr->GetVault(static_cast<size_t>(sel));
+            if (v) {
+                pCtx->selectedSwitchPath = v->path;
+                pCtx->switchRequested = true;
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        }
+
+        if (id == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    }
+    return FALSE;
+}
+
+// ======================== 左侧目录树顶部切换栏 ========================
+struct VaultBarState {
+    bool isHovered = false;
+    bool isPressed = false;
+    MainWindow* pMain = nullptr;
+};
+
+LRESULT CALLBACK VaultBarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* pState = reinterpret_cast<VaultBarState*>(dwRefData);
+    switch (uMsg) {
+    case WM_MOUSEMOVE: {
+        if (pState && !pState->isHovered) {
+            pState->isHovered = true;
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+            TrackMouseEvent(&tme);
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE: {
+        if (pState) {
+            pState->isHovered = false;
+            pState->isPressed = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+    case WM_LBUTTONDOWN: {
+        if (pState) {
+            pState->isPressed = true;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+    case WM_LBUTTONUP: {
+        if (pState && pState->isPressed) {
+            pState->isPressed = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+            if (pState->pMain) {
+                pState->pMain->ShowVaultMenu();
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+
+        HDC memDC = CreateCompatibleDC(hdc);
+        HBITMAP memBitmap = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+        HBITMAP oldBitmap = (HBITMAP)SelectObject(memDC, memBitmap);
+
+        COLORREF bgCol = RGB(255, 255, 255);
+        if (pState && pState->isPressed) {
+            bgCol = RGB(232, 238, 245);
+        } else if (pState && pState->isHovered) {
+            bgCol = RGB(244, 247, 251);
+        }
+        HBRUSH hBg = CreateSolidBrush(bgCol);
+        FillRect(memDC, &rc, hBg);
+        DeleteObject(hBg);
+
+        // 底部细边框线
+        HBRUSH hLine = CreateSolidBrush(RGB(226, 230, 234));
+        RECT lineRc = { rc.left, rc.bottom - 1, rc.right, rc.bottom };
+        FillRect(memDC, &lineRc, hLine);
+        DeleteObject(hLine);
+
+        UINT dpi = GetDpiForWindow(hWnd);
+        HFONT hFont = CreateFontW(
+            -MulDiv(10, dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
+        );
+        HFONT oldFont = (HFONT)SelectObject(memDC, hFont);
+        SetBkMode(memDC, TRANSPARENT);
+        SetTextColor(memDC, RGB(45, 52, 60));
+
+        std::wstring vaultTitle = L"📚 ";
+        if (pState && pState->pMain) {
+            vaultTitle += pState->pMain->GetActiveVaultDisplayName();
+        }
+
+        RECT textRc = rc;
+        textRc.left += MulDiv(10, dpi, 96);
+        textRc.right -= MulDiv(26, dpi, 96);
+        textRc.bottom -= 1;
+        DrawTextW(memDC, vaultTitle.c_str(), -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        // 右侧下拉箭头
+        SetTextColor(memDC, RGB(130, 140, 150));
+        RECT arrowRc = rc;
+        arrowRc.left = rc.right - MulDiv(24, dpi, 96);
+        arrowRc.bottom -= 1;
+        DrawTextW(memDC, L"▾", -1, &arrowRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+        SelectObject(memDC, oldFont);
+        DeleteObject(hFont);
+
+        BitBlt(hdc, 0, 0, rc.right, rc.bottom, memDC, 0, 0, SRCCOPY);
+        SelectObject(memDC, oldBitmap);
+        DeleteObject(memBitmap);
+        DeleteDC(memDC);
+
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_NCDESTROY: {
+        delete pState;
+        RemoveWindowSubclass(hWnd, VaultBarSubclassProc, uIdSubclass);
+        break;
+    }
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 } // namespace
 
 static bool s_mainClassRegistered = false;
@@ -366,8 +860,27 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     // 3. 初始化分割条
     m_splitter.Initialize(m_hWnd, m_splitterPos, toolbarH, clientH - toolbarH - statusbarH, false);
 
-    // 4. 初始化左侧目录树
-    m_treeView.Initialize(m_hWnd, 0, toolbarH, m_splitterPos, clientH - toolbarH - statusbarH, IDC_MAIN_TREEVIEW);
+    // 4. 初始化左侧目录树顶部切换栏与目录树
+    int vaultBarH = MulDiv(30, dpi, 96);
+    m_hVaultBar = CreateWindowExW(
+        0,
+        L"BUTTON",
+        L"",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, toolbarH, m_splitterPos, vaultBarH,
+        m_hWnd,
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_MAIN_VAULT_BAR)),
+        hInstance,
+        nullptr
+    );
+    if (m_hVaultBar) {
+        auto* pState = new VaultBarState();
+        pState->pMain = this;
+        SetWindowSubclass(m_hVaultBar, VaultBarSubclassProc, 1, reinterpret_cast<DWORD_PTR>(pState));
+    }
+
+    int treeH = std::max(40, clientH - toolbarH - statusbarH - vaultBarH);
+    m_treeView.Initialize(m_hWnd, 0, toolbarH + vaultBarH, m_splitterPos, treeH, IDC_MAIN_TREEVIEW);
 
     // 5. 初始化右侧富文本编辑器
     if (!m_richEditView.Initialize(
@@ -396,8 +909,31 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         SetFocus(m_richEditView.GetHwnd());
     });
 
-    // 8. 打开默认便携笔记本并从数据库加载节点树
-    OpenNotebook(GetDefaultNotebookPath(), "");
+    // 8. 加载多库配置并打开活动库 (若失效则优雅回退；仅当首次无任何库时填充欢迎笔记)
+    m_vaultManager.Load();
+    bool shouldAddWelcomeNotes = m_vaultManager.IsFirstTimeCreation();
+    std::wstring activePath = m_vaultManager.GetActiveVaultPath();
+    if (!std::filesystem::exists(activePath)) {
+        bool found = false;
+        for (const auto& v : m_vaultManager.GetVaults()) {
+            if (std::filesystem::exists(v.path)) {
+                activePath = v.path;
+                m_vaultManager.SetActiveVaultPath(activePath);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            std::error_code ec;
+            std::filesystem::create_directories(m_vaultManager.GetNotebooksDir(), ec);
+            activePath = m_vaultManager.GenerateNewVaultPath(L"我的笔记");
+            m_vaultManager.AddVault(L"我的笔记", activePath);
+            m_vaultManager.SetActiveVaultPath(activePath);
+            shouldAddWelcomeNotes = true;
+        }
+    }
+    OpenNotebook(activePath, "", shouldAddWelcomeNotes);
+    UpdateVaultBarUI();
 
     LayoutChildren(clientW, clientH);
     Show(nCmdShow);
@@ -412,12 +948,18 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
     UINT dpi = GetDpiForWindow(m_hWnd);
     int toolbarH = m_toolbar.GetPreferredHeight();
     int statusbarH = MulDiv(21, dpi, 96);
+    int vaultBarH = MulDiv(30, dpi, 96);
     int workH = std::max(100, clientHeight - toolbarH - statusbarH);
+    int treeH = std::max(40, workH - vaultBarH);
 
     m_toolbar.SetBounds(0, 0, clientWidth, toolbarH);
 
     m_splitterPos = std::clamp(m_splitterPos, 150, std::max(160, clientWidth - 250));
-    m_treeView.SetBounds(0, toolbarH, m_splitterPos, workH);
+
+    if (m_hVaultBar) {
+        SetWindowPos(m_hVaultBar, nullptr, 0, toolbarH, m_splitterPos, vaultBarH, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    m_treeView.SetBounds(0, toolbarH + vaultBarH, m_splitterPos, treeH);
     m_splitter.SetBounds(m_splitterPos, toolbarH, 5, workH);
 
     int editorX = m_splitterPos + 5;
@@ -482,7 +1024,7 @@ void MainWindow::ShowInsertCodeDialog() {
     }
 }
 
-bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& password) {
+bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& password, bool createWelcomeIfEmpty) {
     if (!SaveActiveNote()) return false;
 
     auto newDb = std::make_unique<storage::Database>();
@@ -522,7 +1064,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
         return false;
     }
 
-    if (newRepo->GetNodeCount() == 0) {
+    if (createWelcomeIfEmpty && newRepo->GetNodeCount() == 0) {
         newRepo->CreateDefaultWelcomeNotes();
     }
 
@@ -531,17 +1073,17 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     m_searchPane.SetRepository(m_repo.get());
     m_currentNotebookPath = filePath;
 
-    // 更新窗口标题
-    std::wstring fileName = filePath;
-    size_t slashPos = fileName.find_last_of(L"\\/");
-    if (slashPos != std::wstring::npos) {
-        fileName = fileName.substr(slashPos + 1);
+    // 更新窗口标题 (优先显示库的友好名称或文件名)
+    std::wstring displayName = m_vaultManager.GetActiveVaultDisplayName();
+    if (displayName.empty() || displayName == L"未选择库") {
+        displayName = std::filesystem::path(filePath).stem().wstring();
     }
-    std::wstring title = L"AnyNote - [" + fileName + L"]";
+    std::wstring title = L"AnyNote - [" + displayName + L"]";
     SetWindowTextW(m_hWnd, title.c_str());
 
     UpdateEncryptionStatusUI();
     PopulateTreeViewFromDb();
+    UpdateVaultBarUI();
 
     return true;
 }
@@ -573,7 +1115,11 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
     if (!m_repo) return;
 
     auto nodes = m_repo->GetAllNodes();
-    if (nodes.empty()) return;
+    if (nodes.empty()) {
+        m_richEditView.SetText(L"");
+        UpdateStatusBar(L"就绪 | 当前笔记本库为空，可在目录树右键或按 Ctrl+N 新建笔记");
+        return;
+    }
 
     std::unordered_map<int64_t, HTREEITEM> idToItem;
     std::vector<storage::NoteNode> remaining = std::move(nodes);
@@ -1015,6 +1561,15 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     case WM_COMMAND: {
         WORD cmdId = LOWORD(wParam);
+        if (cmdId >= ID_VAULT_SWITCH_BASE && cmdId <= ID_VAULT_SWITCH_MAX) {
+            size_t idx = static_cast<size_t>(cmdId - ID_VAULT_SWITCH_BASE);
+            const auto* vault = m_vaultManager.GetVault(idx);
+            if (vault) {
+                SwitchToVault(vault->path);
+            }
+            return 0;
+        }
+
         switch (cmdId) {
         // 工具栏标题下拉框事件
         case IDC_TOOLBAR_HEADING_COMBO: {
@@ -1250,33 +1805,22 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case ID_FILE_NEW_NOTEBOOK: {
-            wchar_t szFile[MAX_PATH] = L"MyNotebook.anynote";
-            OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
-            ofn.hwndOwner = m_hWnd;
-            ofn.lpstrFilter = L"AnyNote 笔记本 (*.anynote)\0*.anynote\0所有文件 (*.*)\0*.*\0";
-            ofn.lpstrFile = szFile;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.lpstrDefExt = L"anynote";
-            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-
-            if (GetSaveFileNameW(&ofn)) {
-                OpenNotebook(szFile, "");
-            }
+            OnNewVault();
             return 0;
         }
 
         case ID_FILE_OPEN_NOTEBOOK: {
-            wchar_t szFile[MAX_PATH] = {0};
-            OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
-            ofn.hwndOwner = m_hWnd;
-            ofn.lpstrFilter = L"AnyNote 笔记本 (*.anynote)\0*.anynote\0所有文件 (*.*)\0*.*\0";
-            ofn.lpstrFile = szFile;
-            ofn.nMaxFile = MAX_PATH;
-            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            OnOpenExternalVault();
+            return 0;
+        }
 
-            if (GetOpenFileNameW(&ofn)) {
-                OpenNotebook(szFile, "");
-            }
+        case ID_FILE_MANAGE_VAULTS: {
+            OnManageVaults();
+            return 0;
+        }
+
+        case IDC_MAIN_VAULT_BAR: {
+            ShowVaultMenu();
             return 0;
         }
 
@@ -1539,6 +2083,123 @@ void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
     SetForegroundWindow(m_hWnd);
     TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, ptScreen.x, ptScreen.y, 0, m_hWnd, nullptr);
     DestroyMenu(hMenu);
+}
+
+void MainWindow::UpdateVaultBarUI() {
+    if (m_hVaultBar) {
+        InvalidateRect(m_hVaultBar, nullptr, TRUE);
+    }
+}
+
+void MainWindow::ShowVaultMenu() {
+    if (!m_hVaultBar) return;
+    RECT rc;
+    GetWindowRect(m_hVaultBar, &rc);
+
+    HMENU hMenu = CreatePopupMenu();
+    const auto& vaults = m_vaultManager.GetVaults();
+    std::wstring activePath = m_vaultManager.GetActiveVaultPath();
+
+    for (size_t i = 0; i < vaults.size() && (ID_VAULT_SWITCH_BASE + i <= ID_VAULT_SWITCH_MAX); ++i) {
+        UINT flags = MF_STRING;
+        if (_wcsicmp(vaults[i].path.c_str(), activePath.c_str()) == 0) {
+            flags |= MF_CHECKED;
+        }
+        std::wstring itemText = vaults[i].name;
+        AppendMenuW(hMenu, flags, ID_VAULT_SWITCH_BASE + i, itemText.c_str());
+    }
+
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_NOTEBOOK, L"➕ 新建笔记本库(&N)...");
+    AppendMenuW(hMenu, MF_STRING, ID_FILE_OPEN_NOTEBOOK, L"📂 打开外部笔记本库(&O)...");
+    AppendMenuW(hMenu, MF_STRING, ID_FILE_MANAGE_VAULTS, L"⚙ 管理笔记本库(&M)...");
+
+    TrackPopupMenuEx(hMenu, TPM_LEFTALIGN | TPM_TOPALIGN, rc.left, rc.bottom, m_hWnd, nullptr);
+    DestroyMenu(hMenu);
+}
+
+void MainWindow::OnNewVault() {
+    NewVaultContext ctx;
+    ctx.mgr = &m_vaultManager;
+    INT_PTR res = DialogBoxParamW(
+        GetModuleHandleW(nullptr),
+        MAKEINTRESOURCEW(IDD_NEW_VAULT),
+        m_hWnd,
+        NewVaultDialogProc,
+        reinterpret_cast<LPARAM>(&ctx)
+    );
+
+    if (res == IDOK && ctx.ok) {
+        std::error_code ec;
+        std::filesystem::create_directories(m_vaultManager.GetNotebooksDir(), ec);
+        m_vaultManager.AddVault(ctx.name, ctx.path);
+        SwitchToVault(ctx.path, true);
+    }
+}
+
+void MainWindow::OnOpenExternalVault() {
+    wchar_t szFile[MAX_PATH] = {0};
+    OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+    ofn.hwndOwner = m_hWnd;
+    ofn.lpstrFilter = L"AnyNote 笔记本 (*.anynote)\0*.anynote\0所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+
+    if (GetOpenFileNameW(&ofn)) {
+        std::wstring path = szFile;
+        std::wstring name = std::filesystem::path(path).stem().wstring();
+        m_vaultManager.AddVault(name, path);
+        SwitchToVault(path);
+    }
+}
+
+void MainWindow::OnManageVaults() {
+    ManageVaultsContext ctx;
+    ctx.mgr = &m_vaultManager;
+    ctx.mainWindow = this;
+    INT_PTR res = DialogBoxParamW(
+        GetModuleHandleW(nullptr),
+        MAKEINTRESOURCEW(IDD_MANAGE_VAULTS),
+        m_hWnd,
+        ManageVaultsDialogProc,
+        reinterpret_cast<LPARAM>(&ctx)
+    );
+
+    if (ctx.switchRequested && !ctx.selectedSwitchPath.empty()) {
+        SwitchToVault(ctx.selectedSwitchPath);
+    } else {
+        UpdateVaultBarUI();
+    }
+}
+
+bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
+    if (_wcsicmp(path.c_str(), m_currentNotebookPath.c_str()) == 0) {
+        m_vaultManager.SetActiveVaultPath(path);
+        UpdateVaultBarUI();
+        return true;
+    }
+
+    if (!createIfMissing && !std::filesystem::exists(path)) {
+        std::wstring msg = L"未找到笔记库文件：\r\n" + path + L"\r\n\r\n该文件可能已被移动或删除。是否从库列表中移除此项？";
+        if (MessageBoxW(m_hWnd, msg.c_str(), L"库文件未找到", MB_YESNO | MB_ICONWARNING) == IDYES) {
+            int idx = m_vaultManager.FindVaultByPath(path);
+            if (idx >= 0) {
+                m_vaultManager.RemoveVault(static_cast<size_t>(idx));
+            }
+            UpdateVaultBarUI();
+        }
+        return false;
+    }
+
+    std::wstring previousActivePath = m_vaultManager.GetActiveVaultPath();
+    m_vaultManager.SetActiveVaultPath(path);
+    if (OpenNotebook(path, "")) {
+        UpdateVaultBarUI();
+        return true;
+    }
+    m_vaultManager.SetActiveVaultPath(previousActivePath);
+    return false;
 }
 
 } // namespace anynote::ui

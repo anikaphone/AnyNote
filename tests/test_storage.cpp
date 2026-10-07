@@ -1,5 +1,6 @@
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
+#include "storage/VaultManager.h"
 #include <iostream>
 #ifdef NDEBUG
 #undef NDEBUG
@@ -218,6 +219,67 @@ int main() {
         std::filesystem::remove(dbPath);
     }
 
-    std::cout << "[TEST] ALL PERSISTENCE AND ENCRYPTION TESTS PASSED SUCCESSFULLY!" << std::endl;
+    // 12. 测试多库配置管理器 VaultManager (INI 读写与全生命周期)
+    std::cout << "[TEST] 12. Testing VaultManager multi-vault operations and INI persistence..." << std::endl;
+    const std::filesystem::path vaultTestDir = std::filesystem::temp_directory_path() / L"AnyNoteVaultManagerTest";
+    std::error_code vaultTestEc;
+    std::filesystem::remove_all(vaultTestDir, vaultTestEc);
+    std::filesystem::create_directories(vaultTestDir, vaultTestEc);
+    assert(!vaultTestEc);
+    {
+        std::wstring iniPath = (vaultTestDir / L"anynote.ini").wstring();
+        VaultManager mgr(iniPath);
+
+        // 初次加载测试
+        assert(mgr.Load());
+        assert(mgr.GetVaultCount() >= 1);
+        size_t initialCount = mgr.GetVaultCount();
+
+        // 路径生成
+        std::wstring newVaultPath = mgr.GenerateNewVaultPath(L"工作规划 2026");
+        assert(newVaultPath.find(L"工作规划 2026.anynote") != std::wstring::npos);
+
+        // 添加新库 (带中文字符)
+        assert(mgr.AddVault(L"工作规划 2026", newVaultPath));
+        assert(mgr.GetVaultCount() == initialCount + 1);
+
+        // 大小写不敏感查找
+        int foundIdx = mgr.FindVaultByPath(newVaultPath);
+        assert(foundIdx >= 0);
+
+        // 切换激活库
+        mgr.SetActiveVaultPath(newVaultPath);
+        assert(mgr.GetActiveVaultPath() == newVaultPath);
+        assert(mgr.GetActiveVaultDisplayName() == L"工作规划 2026");
+
+        // 重命名库
+        assert(mgr.RenameVault(static_cast<size_t>(foundIdx), L"年度工作目标"));
+        assert(mgr.GetActiveVaultDisplayName() == L"年度工作目标");
+
+        // 新建另一个测试库
+        std::wstring lifeVaultPath = mgr.GenerateNewVaultPath(L"个人随想");
+        assert(mgr.AddVault(L"个人随想", lifeVaultPath));
+        size_t countBeforeReload = mgr.GetVaultCount();
+
+        // 重新实例化 VaultManager 模拟重启读取 INI 文件
+        VaultManager reloadMgr(iniPath);
+        assert(reloadMgr.Load());
+        assert(reloadMgr.GetVaultCount() == countBeforeReload);
+        assert(reloadMgr.GetActiveVaultPath() == newVaultPath);
+        assert(reloadMgr.GetActiveVaultDisplayName() == L"年度工作目标");
+
+        int lifeIdx = reloadMgr.FindVaultByPath(lifeVaultPath);
+        assert(lifeIdx >= 0);
+        assert(reloadMgr.GetVault(static_cast<size_t>(lifeIdx))->name == L"个人随想");
+
+        // 移除测试库
+        assert(reloadMgr.RemoveVault(static_cast<size_t>(lifeIdx)));
+        assert(reloadMgr.GetVaultCount() == countBeforeReload - 1);
+        assert(reloadMgr.FindVaultByPath(lifeVaultPath) == -1);
+
+    }
+    std::filesystem::remove_all(vaultTestDir, vaultTestEc);
+
+    std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION AND MULTI-VAULT TESTS PASSED SUCCESSFULLY!" << std::endl;
     return 0;
 }

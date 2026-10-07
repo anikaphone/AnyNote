@@ -9,6 +9,7 @@
 #include "ui/SearchPane.h"
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
+#include "storage/VaultManager.h"
 #include <memory>
 #include <string>
 
@@ -21,6 +22,9 @@ public:
 
     bool Initialize(HINSTANCE hInstance, int nCmdShow);
     HWND GetFindReplaceDialogHwnd() const noexcept { return m_findReplaceDialog.GetHwnd(); }
+    std::wstring GetActiveVaultDisplayName() const { return m_vaultManager.GetActiveVaultDisplayName(); }
+    void ShowVaultMenu();
+    bool SwitchToVault(const std::wstring& path, bool createIfMissing = false);
 
     static const wchar_t* GetClassName() { return L"AnyNoteMainWindow"; }
     static void RegisterClassIfNeeded(HINSTANCE hInstance);
@@ -34,7 +38,7 @@ private:
     void OnTreeSelectionChanged(NMTREEVIEWW* pNmtv);
     void ShowInsertCodeDialog();
 
-    bool OpenNotebook(const std::wstring& filePath, const std::string& password = "");
+    bool OpenNotebook(const std::wstring& filePath, const std::string& password = "", bool createWelcomeIfEmpty = false);
     void PopulateTreeViewFromDb(int64_t selectNodeId = 0);
     bool SelectNodeById(int64_t nodeId);
     bool SaveActiveNote();
@@ -47,6 +51,15 @@ private:
     void OnSearchResultSelected(const storage::SearchResult& result);
     void ShowTreeContextMenu(int xScreen, int yScreen);
     void ShowEditorContextMenu(int xScreen, int yScreen);
+
+    // 多笔记本库相关操作
+    void UpdateVaultBarUI();
+    void OnNewVault();
+    void OnOpenExternalVault();
+    void OnManageVaults();
+
+    HWND m_hVaultBar = nullptr;
+    storage::VaultManager m_vaultManager;
 
     Toolbar m_toolbar;
     Splitter m_splitter;

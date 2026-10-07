@@ -10,6 +10,9 @@
 #define IDD_INSERT_CODE         104
 #define IDD_SET_PASSWORD        105
 #define IDD_ENTER_PASSWORD      106
+#define IDD_NEW_VAULT           107
+#define IDD_MANAGE_VAULTS       108
+#define IDD_RENAME_VAULT        109
 
 // File Commands
 #define ID_FILE_NEW_NOTE        1001
@@ -20,6 +23,7 @@
 #define ID_FILE_OPEN_NOTEBOOK   1006
 #define ID_FILE_SAVE            1007
 #define ID_FILE_EXIT            1008
+#define ID_FILE_MANAGE_VAULTS   1009
 #define ID_TREE_EXPAND_ALL      1020
 #define ID_TREE_COLLAPSE_ALL    1021
 
@@ -68,6 +72,10 @@
 // Security Commands
 #define ID_SECURITY_ENCRYPT     1401
 
+// Vault Dynamic Commands (1410 ~ 1450)
+#define ID_VAULT_SWITCH_BASE    1410
+#define ID_VAULT_SWITCH_MAX     1450
+
 // Help Commands
 #define ID_HELP_ABOUT           1501
 
@@ -81,6 +89,7 @@
 #define IDC_MAIN_SEARCH_BAR     2007
 #define IDC_MAIN_SPLITTER_H     2008
 #define IDC_TOOLBAR_HEADING_COMBO 2010
+#define IDC_MAIN_VAULT_BAR      2011
 
 // Code Block Dialog IDs
 #define IDC_CODE_LANG           2101
@@ -90,3 +99,14 @@
 #define IDC_PASSWORD_NEW        2201
 #define IDC_PASSWORD_CONFIRM    2202
 #define IDC_PASSWORD_INPUT      2203
+
+// Vault Management Dialog IDs
+#define IDC_NEW_VAULT_NAME      2301
+#define IDC_NEW_VAULT_PATH      2302
+#define IDC_VAULT_LIST          2311
+#define IDC_VAULT_BTN_RENAME    2312
+#define IDC_VAULT_BTN_REMOVE    2313
+#define IDC_VAULT_BTN_EXPLORER  2314
+#define IDC_VAULT_BTN_SWITCH    2315
+#define IDC_VAULT_BTN_NEW       2316
+#define IDC_RENAME_VAULT_INPUT  2321
