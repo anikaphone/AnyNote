@@ -8,19 +8,25 @@ namespace anynote::ui {
 class Toolbar {
 public:
     Toolbar() = default;
-    ~Toolbar() = default;
+    ~Toolbar();
 
     bool Initialize(HWND hParent, UINT controlId);
     HWND GetHwnd() const noexcept { return m_hWnd; }
+    HWND GetHeadingComboHwnd() const noexcept { return m_hHeadingCombo; }
 
     void SetBounds(int x, int y, int width, int height);
-    int GetPreferredHeight() const {
-        UINT dpi = m_hWnd ? GetDpiForWindow(m_hWnd) : 96;
-        return MulDiv(36, dpi, 96);
-    }
+    int GetPreferredHeight() const;
+
+    void SetSelectedHeadingIndex(int index);
+    int GetSelectedHeadingIndex() const;
 
 private:
     HWND m_hWnd = nullptr;
+    HWND m_hParent = nullptr;
+    HWND m_hHeadingCombo = nullptr;
+    HFONT m_hFont = nullptr;
+    UINT m_fontDpi = 0;
+    void UpdateFontForDpi(UINT dpi);
 };
 
 } // namespace anynote::ui

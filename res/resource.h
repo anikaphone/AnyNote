@@ -28,6 +28,11 @@
 #define ID_EDIT_SELECTALL       1106
 
 // Format Commands
+#define ID_FORMAT_HEADING_0     1210
+#define ID_FORMAT_HEADING_1     1211
+#define ID_FORMAT_HEADING_2     1212
+#define ID_FORMAT_HEADING_3     1213
+#define ID_FORMAT_HEADING_4     1214
 #define ID_FORMAT_BOLD          1201
 #define ID_FORMAT_ITALIC        1202
 #define ID_FORMAT_UNDERLINE     1203
@@ -52,6 +57,7 @@
 #define IDC_MAIN_TREEVIEW       2003
 #define IDC_MAIN_RICHEDIT       2004
 #define IDC_MAIN_SPLITTER       2005
+#define IDC_TOOLBAR_HEADING_COMBO 2010
 
 // Code Block Dialog IDs
 #define IDC_CODE_LANG           2101

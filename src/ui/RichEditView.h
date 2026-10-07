@@ -8,6 +8,8 @@
 
 namespace anynote::ui {
 
+inline constexpr UINT WM_EDITOR_FORMAT_CHANGED = WM_APP + 20;
+
 class RichEditView {
 public:
     RichEditView() = default;
@@ -28,6 +30,9 @@ public:
     std::string StreamOutRTF() const;
 
     // 富文本样式操作
+    void ApplyHeading(int level);
+    int GetCurrentHeadingLevel() const;
+
     void ToggleBold();
     void ToggleItalic();
     void ToggleUnderline();

@@ -466,6 +466,9 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
 
 LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+    case WM_EDITOR_FORMAT_CHANGED:
+        m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
+        return 0;
     case WM_SIZE: {
         int width = LOWORD(lParam);
         int height = HIWORD(lParam);
@@ -516,6 +519,12 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 }
                 return FALSE;
             }
+        } else if (pNmhdr && pNmhdr->idFrom == IDC_MAIN_RICHEDIT) {
+            if (pNmhdr->code == EN_SELCHANGE) {
+                int level = m_richEditView.GetCurrentHeadingLevel();
+                m_toolbar.SetSelectedHeadingIndex(level);
+                return 0;
+            }
         }
         break;
     }
@@ -523,6 +532,39 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_COMMAND: {
         WORD cmdId = LOWORD(wParam);
         switch (cmdId) {
+        // 工具栏标题下拉框事件
+        case IDC_TOOLBAR_HEADING_COMBO: {
+            if (HIWORD(wParam) == CBN_SELCHANGE) {
+                int idx = m_toolbar.GetSelectedHeadingIndex();
+                m_richEditView.ApplyHeading(idx);
+                SetFocus(m_richEditView.GetHwnd());
+                return 0;
+            }
+            break;
+        }
+
+        // 标题与正文样式命令
+        case ID_FORMAT_HEADING_0:
+            m_richEditView.ApplyHeading(0);
+            m_toolbar.SetSelectedHeadingIndex(0);
+            return 0;
+        case ID_FORMAT_HEADING_1:
+            m_richEditView.ApplyHeading(1);
+            m_toolbar.SetSelectedHeadingIndex(1);
+            return 0;
+        case ID_FORMAT_HEADING_2:
+            m_richEditView.ApplyHeading(2);
+            m_toolbar.SetSelectedHeadingIndex(2);
+            return 0;
+        case ID_FORMAT_HEADING_3:
+            m_richEditView.ApplyHeading(3);
+            m_toolbar.SetSelectedHeadingIndex(3);
+            return 0;
+        case ID_FORMAT_HEADING_4:
+            m_richEditView.ApplyHeading(4);
+            m_toolbar.SetSelectedHeadingIndex(4);
+            return 0;
+
         // 富文本格式化命令
         case ID_FORMAT_BOLD:
             m_richEditView.ToggleBold();

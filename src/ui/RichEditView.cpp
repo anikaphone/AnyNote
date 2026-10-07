@@ -40,8 +40,44 @@ DWORD CALLBACK StreamOutCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LON
 
 } // namespace
 
+static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* pThis = reinterpret_cast<RichEditView*>(dwRefData);
+    if (uMsg == WM_CHAR && wParam == VK_RETURN && pThis) {
+        int curLevel = pThis->GetCurrentHeadingLevel();
+        LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        if (curLevel > 0) {
+            pThis->ApplyHeading(0);
+        }
+        return res;
+    }
+    if (uMsg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hWnd, RichEditSubclassProc, uIdSubclass);
+    }
+    LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    switch (uMsg) {
+    case WM_CHAR:
+    case WM_KEYDOWN:
+    case WM_SETTEXT:
+    case WM_CUT:
+    case WM_PASTE:
+    case WM_CLEAR:
+    case WM_UNDO:
+    case EM_UNDO:
+    case EM_REDO:
+    case EM_REPLACESEL:
+    case EM_STREAMIN:
+    case EM_SETCHARFORMAT:
+    case EM_SETPARAFORMAT:
+        // 在完整操作结束后查询格式，避免读到加载/格式化中的临时选区。
+        PostMessageW(GetParent(hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
+        break;
+    }
+    return result;
+}
+
 RichEditView::~RichEditView() {
     if (m_hWnd) {
+        RemoveWindowSubclass(m_hWnd, RichEditSubclassProc, 1);
         DestroyWindow(m_hWnd);
         m_hWnd = nullptr;
     }
@@ -82,6 +118,9 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
     }
 
     m_richEditModule = richEditModule;
+
+    // 挂载子类化过程以处理标题回车换行自动恢复正文
+    SetWindowSubclass(m_hWnd, RichEditSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
 
     // 设置内边距 (Padding): 左右各 16 像素，顶部更舒适
     SendMessageW(m_hWnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(16, 16));
@@ -194,6 +233,115 @@ std::string RichEditView::StreamOutRTF() const {
 
     SendMessageW(m_hWnd, EM_STREAMOUT, SF_RTF, reinterpret_cast<LPARAM>(&es));
     return outData;
+}
+
+void RichEditView::ApplyHeading(int level) {
+    if (!m_hWnd) return;
+
+    // 1. 获取当前选区
+    CHARRANGE crOrig = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+
+    // 2. 按逻辑段落边界扩展选区，自动折行不构成段落边界。
+    // RAWTEXT 保留对象及表格标记，保证文本下标与 RichEdit 字符位置一致。
+    GETTEXTLENGTHEX lengthInfo = {};
+    lengthInfo.flags = GTL_PRECISE | GTL_NUMCHARS;
+    lengthInfo.codepage = 1200;
+    LONG length = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX,
+        reinterpret_cast<WPARAM>(&lengthInfo), 0));
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    GETTEXTEX textInfo = {};
+    textInfo.cb = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+    textInfo.flags = GT_RAWTEXT;
+    textInfo.codepage = 1200;
+    LONG copied = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTEX,
+        reinterpret_cast<WPARAM>(&textInfo), reinterpret_cast<LPARAM>(text.data())));
+    text.resize(static_cast<size_t>(copied));
+
+    LONG start = std::min(crOrig.cpMin, copied);
+    LONG end = std::min(crOrig.cpMax > crOrig.cpMin ? crOrig.cpMax - 1 : crOrig.cpMin, copied);
+    auto isParagraphBreak = [](wchar_t ch) { return ch == L'\r' || ch == L'\n'; };
+    while (start > 0 && !isParagraphBreak(text[start - 1])) --start;
+    while (end < copied && !isParagraphBreak(text[end])) ++end;
+    CHARRANGE paragraphRange = { start, end };
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&paragraphRange));
+
+    // 3. 设置字符格式
+    CHARFORMAT2W cf = {sizeof(CHARFORMAT2W)};
+    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BOLD | CFM_BACKCOLOR;
+    cf.crBackColor = RGB(255, 255, 255);
+    cf.dwEffects = CFE_AUTOBACKCOLOR;
+    wcscpy_s(cf.szFaceName, L"Segoe UI");
+
+    // 4. 设置段落格式 (段前/段后间距)
+    PARAFORMAT2 pf = {sizeof(PARAFORMAT2)};
+    pf.dwMask = PFM_SPACEBEFORE | PFM_SPACEAFTER;
+
+    switch (level) {
+    case 1:
+        cf.yHeight = 360; // 18pt
+        cf.dwEffects |= CFE_BOLD;
+        cf.crTextColor = RGB(0, 92, 197); // 经典主题品蓝
+        pf.dySpaceBefore = 160;
+        pf.dySpaceAfter = 100;
+        break;
+    case 2:
+        cf.yHeight = 300; // 15pt
+        cf.dwEffects |= CFE_BOLD;
+        cf.crTextColor = RGB(3, 102, 214); // 经典主题蓝
+        pf.dySpaceBefore = 120;
+        pf.dySpaceAfter = 80;
+        break;
+    case 3:
+        cf.yHeight = 260; // 13pt
+        cf.dwEffects |= CFE_BOLD;
+        cf.crTextColor = RGB(36, 41, 47); // 深炭灰粗体
+        pf.dySpaceBefore = 80;
+        pf.dySpaceAfter = 60;
+        break;
+    case 4:
+        cf.yHeight = 220; // 11pt
+        cf.dwEffects |= CFE_BOLD;
+        cf.crTextColor = RGB(36, 41, 47); // 深炭灰粗体
+        pf.dySpaceBefore = 60;
+        pf.dySpaceAfter = 40;
+        break;
+    case 0:
+    default:
+        cf.yHeight = 220; // 11pt
+        cf.crTextColor = RGB(33, 37, 41); // 常规深黑
+        pf.dySpaceBefore = 0;
+        pf.dySpaceAfter = 100;
+        break;
+    }
+
+    SendMessageW(m_hWnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&cf));
+    SendMessageW(m_hWnd, EM_SETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&pf));
+
+    // 恢复原来的光标或选区
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+}
+
+int RichEditView::GetCurrentHeadingLevel() const {
+    if (!m_hWnd) return 0;
+
+    CHARFORMAT2W cf = {sizeof(CHARFORMAT2W)};
+    SendMessageW(m_hWnd, EM_GETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&cf));
+
+    if (cf.yHeight >= 340) {
+        return 1;
+    } else if (cf.yHeight >= 280) {
+        return 2;
+    } else if (cf.yHeight >= 250) {
+        return 3;
+    } else if (cf.yHeight <= 230 && (cf.dwEffects & CFE_BOLD) && cf.yHeight > 0) {
+        PARAFORMAT2 pf = {sizeof(PARAFORMAT2)};
+        SendMessageW(m_hWnd, EM_GETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&pf));
+        if (pf.dySpaceBefore > 0) {
+            return 4;
+        }
+    }
+    return 0;
 }
 
 void RichEditView::ToggleBold() {

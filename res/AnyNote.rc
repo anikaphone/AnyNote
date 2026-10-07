@@ -32,6 +32,12 @@ BEGIN
 
     POPUP "格式(&O)"
     BEGIN
+        MENUITEM "正文(&0)\tCtrl+0",             ID_FORMAT_HEADING_0
+        MENUITEM "标题 1(&1)\tCtrl+1",           ID_FORMAT_HEADING_1
+        MENUITEM "标题 2(&2)\tCtrl+2",           ID_FORMAT_HEADING_2
+        MENUITEM "标题 3(&3)\tCtrl+3",           ID_FORMAT_HEADING_3
+        MENUITEM "标题 4(&4)\tCtrl+4",           ID_FORMAT_HEADING_4
+        MENUITEM SEPARATOR
         MENUITEM "粗体(&B)\tCtrl+B",             ID_FORMAT_BOLD
         MENUITEM "斜体(&I)\tCtrl+I",             ID_FORMAT_ITALIC
         MENUITEM "下划线(&U)\tCtrl+U",           ID_FORMAT_UNDERLINE
@@ -63,6 +69,11 @@ END
 // 快捷键表
 IDR_ACCELERATOR ACCELERATORS
 BEGIN
+    "0", ID_FORMAT_HEADING_0,   VIRTKEY, CONTROL
+    "1", ID_FORMAT_HEADING_1,   VIRTKEY, CONTROL
+    "2", ID_FORMAT_HEADING_2,   VIRTKEY, CONTROL
+    "3", ID_FORMAT_HEADING_3,   VIRTKEY, CONTROL
+    "4", ID_FORMAT_HEADING_4,   VIRTKEY, CONTROL
     "N", ID_FILE_NEW_NOTE,      VIRTKEY, CONTROL
     "N", ID_FILE_NEW_SUB_NOTE,  VIRTKEY, CONTROL, SHIFT
     "S", ID_FILE_SAVE,          VIRTKEY, CONTROL
