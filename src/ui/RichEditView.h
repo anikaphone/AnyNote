@@ -48,6 +48,16 @@ public:
     // 核心特色：插入美化且带语法高亮的代码框 (CodeBox)
     bool InsertCodeBlock(std::wstring_view codeContent = L"", common::CodeLanguage lang = common::CodeLanguage::Cpp);
 
+    // 表格操作 (插入 3*2 表格、行列调整、删除、单元格导航)
+    bool InsertTable(int rows = 2, int cols = 3);
+    bool IsCursorInTable() const;
+    bool InsertTableRow(bool below = true);
+    bool InsertTableColumn(bool right = true);
+    bool DeleteTableRow();
+    bool DeleteTableColumn();
+    bool DeleteTable();
+    bool NavigateTableCell(bool forward = true);
+
     // 剪贴板与编辑
     void Undo();
     void Redo();

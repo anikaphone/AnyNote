@@ -54,6 +54,16 @@
 // Insert Commands
 #define ID_INSERT_IMAGE         1301
 #define ID_INSERT_DATETIME      1302
+#define ID_INSERT_TABLE         1303
+
+// Table Operations Commands
+#define ID_TABLE_INSERT_ROW_ABOVE  1310
+#define ID_TABLE_INSERT_ROW_BELOW  1311
+#define ID_TABLE_INSERT_COL_LEFT   1312
+#define ID_TABLE_INSERT_COL_RIGHT  1313
+#define ID_TABLE_DELETE_ROW        1314
+#define ID_TABLE_DELETE_COL        1315
+#define ID_TABLE_DELETE_TABLE      1316
 
 // Security Commands
 #define ID_SECURITY_ENCRYPT     1401

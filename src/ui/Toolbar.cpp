@@ -167,7 +167,28 @@ void RenderFluentIcon(Gdiplus::Graphics& g, int iconIndex, int size) {
         g.DrawLines(&mainPen, peak2, 3);
         break;
     }
-    case 7: { // 7: Save
+    case 7: { // 7: Insert Table (Fluent 3x2 Grid)
+        GraphicsPath path;
+        float x = 2.0f * scale, y = 2.5f * scale, w = 12.0f * scale, h = 11.0f * scale, r = 1.2f * scale;
+        path.AddArc(x, y, r * 2, r * 2, 180, 90);
+        path.AddArc(x + w - r * 2, y, r * 2, r * 2, 270, 90);
+        path.AddArc(x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90);
+        path.AddArc(x, y + h - r * 2, r * 2, r * 2, 90, 90);
+        path.CloseFigure();
+        g.DrawPath(&mainPen, &path);
+
+        // 表头水平分割线
+        float splitY = 6.0f * scale;
+        g.DrawLine(&mainPen, x, splitY, x + w, splitY);
+
+        // 两条垂直列分割线
+        float col1X = 6.0f * scale;
+        float col2X = 10.0f * scale;
+        g.DrawLine(&subPen, col1X, y, col1X, y + h);
+        g.DrawLine(&subPen, col2X, y, col2X, y + h);
+        break;
+    }
+    case 8: { // 8: Save
         PointF diskPts[] = {
             { 2.5f * scale, 2.5f * scale },
             { 11.5f * scale, 2.5f * scale },
@@ -192,7 +213,7 @@ void RenderFluentIcon(Gdiplus::Graphics& g, int iconIndex, int size) {
 
 HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     int iconSize = MulDiv(kToolbarIconSize, dpi, 96);
-    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 8, 0);
+    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 9, 0);
     if (!hImageList) return nullptr;
 
     BITMAPINFO bmi = {};
@@ -203,7 +224,7 @@ HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < 9; ++i) {
         void* pBits = nullptr;
         HBITMAP hBmp = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
         if (!hBmp) continue;
@@ -286,8 +307,9 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         { 5, ID_FORMAT_NUMBER_LIST, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
         { 6, ID_INSERT_IMAGE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
+        { 7, ID_INSERT_TABLE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
-        { 7, ID_FILE_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 }
+        { 8, ID_FILE_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 }
     };
 
     SendMessageW(m_hWnd, TB_ADDBUTTONSW, buttons.size(), reinterpret_cast<LPARAM>(buttons.data()));

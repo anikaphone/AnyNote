@@ -4,6 +4,7 @@
 #include <windowsx.h>
 #include <cwctype>
 #include <vector>
+#include <tom.h>
 
 namespace anynote::ui {
 
@@ -43,12 +44,34 @@ DWORD CALLBACK StreamOutCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LON
 
 } // namespace
 
+
 static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     auto* pThis = reinterpret_cast<RichEditView*>(dwRefData);
+    if (uMsg == WM_KEYDOWN && wParam == VK_TAB && pThis) {
+        if (pThis->IsCursorInTable()) {
+            bool isShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+            if (isShift) {
+                pThis->NavigateTableCell(false);
+            } else {
+                bool moved = pThis->NavigateTableCell(true);
+                if (!moved) {
+                    // 位于表格末尾单元格，按 Tab 自动追加新行并跳入新行首个单元格
+                    if (pThis->InsertTableRow(true)) {
+                        pThis->NavigateTableCell(true);
+                    }
+                }
+            }
+            return 0; // 拦截默认 Tab 键行为，防止跳焦或破坏表格
+        }
+    }
+    if (uMsg == WM_CHAR && wParam == VK_TAB && pThis && pThis->IsCursorInTable()) {
+        // TranslateMessage can still emit WM_CHAR after custom cell navigation.
+        return 0;
+    }
     if (uMsg == WM_CHAR && wParam == VK_RETURN && pThis) {
         int curLevel = pThis->GetCurrentHeadingLevel();
         LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-        if (curLevel > 0) {
+        if (curLevel > 0 && !pThis->IsCursorInTable()) {
             pThis->ApplyHeading(0);
         }
         return res;
@@ -161,7 +184,7 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
 
 void RichEditView::ApplyDefaultFormatting(bool allDocument) {
     CHARFORMAT2W cf = {sizeof(CHARFORMAT2W)};
-    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BACKCOLOR;
+    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT;
     cf.yHeight = 220; // 11pt (20 twips = 1pt)
     cf.crTextColor = RGB(33, 37, 41);
     cf.crBackColor = RGB(255, 255, 255);
@@ -487,6 +510,370 @@ bool RichEditView::InsertCodeBlock(std::wstring_view codeContent, common::CodeLa
     ApplyDefaultFormatting(false);
     return ok;
 }
+
+bool RichEditView::IsCursorInTable() const {
+    if (!m_hWnd) return false;
+    PARAFORMAT2 pf{ sizeof(PARAFORMAT2) };
+    SendMessageW(m_hWnd, EM_GETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&pf));
+    return (pf.dwMask & PFM_TABLE) && (pf.wEffects & PFE_TABLE);
+}
+
+bool RichEditView::InsertTable(int rows, int cols) {
+    if (!m_hWnd || rows <= 0 || cols <= 0) return false;
+
+    // 确保插入前重置为默认正文字体样式，避免继承标题大字号
+    ApplyDefaultFormatting(false);
+
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long cpMin = 0;
+            pSel->GetStart(&cpMin);
+            ITextRange2* pRange2 = nullptr;
+            if (SUCCEEDED(pDoc2->Range2(cpMin, cpMin, &pRange2))) {
+                ITextRow* pRow = nullptr;
+                if (SUCCEEDED(pRange2->GetRow(&pRow))) {
+                    pRow->SetIndent(144);
+                    pRow->SetCellCount(cols);
+                    int perColWidth = std::max(1200, 7200 / cols);
+                    for (int c = 0; c < cols; ++c) {
+                        pRow->SetCellIndex(c);
+                        pRow->SetCellWidth(perColWidth);
+                        pRow->SetCellBorderWidths(15, 15, 15, 15);
+                        pRow->SetCellBorderColors(RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234));
+                    }
+                    if (SUCCEEDED(pRow->Insert(rows))) {
+                        ok = true;
+                        pSel->SetRange(cpMin, cpMin);
+                        long delta = 0;
+                        pSel->Expand(tomTable, &delta);
+                        ApplyDefaultFormatting(false);
+                        pSel->SetRange(cpMin + 2, cpMin + 2);
+                    }
+                    pRow->Release();
+                }
+                pRange2->Release();
+            }
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    SetFocus(m_hWnd);
+    return ok;
+}
+
+bool RichEditView::NavigateTableCell(bool forward) {
+    if (!m_hWnd) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument* pDoc = nullptr;
+    bool success = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument), reinterpret_cast<void**>(&pDoc)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc->GetSelection(&pSel))) {
+            long delta = 0;
+            HRESULT hr = pSel->Move(tomCell, forward ? 1 : -1, &delta);
+            success = (SUCCEEDED(hr) && delta != 0);
+            pSel->Release();
+        }
+        pDoc->Release();
+    }
+    pUnk->Release();
+    return success;
+}
+
+bool RichEditView::InsertTableRow(bool below) {
+    if (!m_hWnd || !IsCursorInTable()) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long curCp = 0;
+            pSel->GetStart(&curCp);
+
+            long storyLen = 0;
+            pSel->GetStoryLength(&storyLen);
+
+            ITextRange* pDocRange = nullptr;
+            pDoc2->Range(0, storyLen, &pDocRange);
+            BSTR text = nullptr;
+            pDocRange->GetText(&text);
+
+            int len = SysStringLen(text);
+            int rowStart = curCp;
+            while (rowStart > 0 && (unsigned short)text[rowStart] != 0xfff9) {
+                rowStart--;
+            }
+            int rowEnd = curCp;
+            while (rowEnd < len && (unsigned short)text[rowEnd] != 0xfffb) {
+                rowEnd++;
+            }
+
+            int numCells = 0;
+            for (int i = rowStart; i < rowEnd; ++i) {
+                if ((unsigned short)text[i] == 0x07) {
+                    numCells++;
+                }
+            }
+            if (numCells == 0) numCells = 3;
+
+            int insPos = below ? (rowEnd + 2) : rowStart;
+            ITextRange2* pInsRange = nullptr;
+            if (SUCCEEDED(pDoc2->Range2(insPos, insPos, &pInsRange))) {
+                ITextRow* pRow = nullptr;
+                if (SUCCEEDED(pInsRange->GetRow(&pRow))) {
+                    pRow->SetIndent(144);
+                    pRow->SetCellCount(numCells);
+                    int perColWidth = std::max(1200, 7200 / numCells);
+                    for (int c = 0; c < numCells; ++c) {
+                        pRow->SetCellIndex(c);
+                        pRow->SetCellWidth(perColWidth);
+                        pRow->SetCellBorderWidths(15, 15, 15, 15);
+                        pRow->SetCellBorderColors(RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234));
+                    }
+                    if (SUCCEEDED(pRow->Insert(1))) {
+                        ok = true;
+                        pSel->SetRange(insPos + 2, insPos + 2);
+                    }
+                    pRow->Release();
+                }
+                pInsRange->Release();
+            }
+
+            SysFreeString(text);
+            pDocRange->Release();
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return ok;
+}
+
+bool RichEditView::DeleteTableRow() {
+    if (!m_hWnd || !IsCursorInTable()) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long curCp = 0;
+            pSel->GetStart(&curCp);
+
+            long storyLen = 0;
+            pSel->GetStoryLength(&storyLen);
+
+            ITextRange* pDocRange = nullptr;
+            pDoc2->Range(0, storyLen, &pDocRange);
+            BSTR text = nullptr;
+            pDocRange->GetText(&text);
+
+            int len = SysStringLen(text);
+            int rowStart = curCp;
+            while (rowStart > 0 && (unsigned short)text[rowStart] != 0xfff9) {
+                rowStart--;
+            }
+            int rowEnd = curCp;
+            while (rowEnd < len && (unsigned short)text[rowEnd] != 0xfffb) {
+                rowEnd++;
+            }
+
+            // Count rows only in the table containing the caret.
+            long tableStart = rowStart;
+            long tableEnd = rowEnd;
+            long savedStart = 0;
+            pSel->GetStart(&savedStart);
+            long tableDelta = 0;
+            if (SUCCEEDED(pSel->Expand(tomTable, &tableDelta))) {
+                pSel->GetStart(&tableStart);
+                pSel->GetEnd(&tableEnd);
+                pSel->SetRange(savedStart, savedStart);
+            }
+            int tableRows = 0;
+            for (long i = std::max(0L, tableStart); i < std::min(static_cast<long>(len), tableEnd); ++i) {
+                if ((unsigned short)text[i] == 0xfff9) ++tableRows;
+            }
+
+            if (tableRows <= 1) {
+                SysFreeString(text);
+                pDocRange->Release();
+                pSel->Release();
+                pDoc2->Release();
+                pUnk->Release();
+                return DeleteTable();
+            }
+
+            ITextRange* pDelRange = nullptr;
+            int delEnd = (rowEnd + 2 <= len) ? (rowEnd + 2) : rowEnd;
+            if (SUCCEEDED(pDoc2->Range(rowStart, delEnd, &pDelRange))) {
+                long delta = 0;
+                pDelRange->Delete(tomCharacter, 0, &delta);
+                pDelRange->Release();
+                ok = true;
+            }
+
+            SysFreeString(text);
+            pDocRange->Release();
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return ok;
+}
+
+bool RichEditView::DeleteTable() {
+    if (!m_hWnd || !IsCursorInTable()) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long delta = 0;
+            if (SUCCEEDED(pSel->Expand(tomTable, &delta))) {
+                pSel->Delete(tomCharacter, 0, &delta);
+                ok = true;
+            }
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return ok;
+}
+
+bool RichEditView::InsertTableColumn(bool right) {
+    if (!m_hWnd || !IsCursorInTable()) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long curCp = 0;
+            pSel->GetStart(&curCp);
+
+            long storyLen = 0;
+            pSel->GetStoryLength(&storyLen);
+
+            long tableDelta = 0, tableStart = 0, tableEnd = 0;
+            if (FAILED(pSel->Expand(tomTable, &tableDelta))) { pSel->Release(); pDoc2->Release(); pUnk->Release(); return false; }
+            pSel->GetStart(&tableStart); pSel->GetEnd(&tableEnd); pSel->SetRange(curCp, curCp);
+            ITextRange* pDocRange = nullptr;
+            pDoc2->Range(0, storyLen, &pDocRange);
+            BSTR text = nullptr;
+            pDocRange->GetText(&text);
+            int len = SysStringLen(text);
+
+            std::vector<int> rows;
+            for (int i = static_cast<int>(tableStart); i < tableEnd && i < len; ++i)
+                if ((unsigned short)text[i] == 0xfff9) rows.push_back(i);
+            int targetCol = 0;
+            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i)
+                if ((unsigned short)text[i] == 0x07) ++targetCol;
+            for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+                ITextRange2* pRowRange = nullptr; ITextRow* pRow = nullptr;
+                if (SUCCEEDED(pDoc2->Range2(*it, *it, &pRowRange)) && SUCCEEDED(pRowRange->GetRow(&pRow))) {
+                    long count = 0;
+                    if (SUCCEEDED(pRow->GetCellCount(&count)) && count > 0) {
+                        pRow->SetCellIndex(std::min(count - 1, static_cast<long>(targetCol + (right ? 1 : 0))));
+                        if (SUCCEEDED(pRow->SetCellCount(count + 1)) && SUCCEEDED(pRow->Apply(1, tomCellStructureChangeOnly))) ok = true;
+                    }
+                    pRow->Release();
+                }
+                if (pRowRange) pRowRange->Release();
+            }
+
+            SysFreeString(text);
+            pDocRange->Release();
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return ok;
+}
+
+bool RichEditView::DeleteTableColumn() {
+    if (!m_hWnd || !IsCursorInTable()) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextSelection* pSel = nullptr;
+        if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
+            long curCp = 0;
+            pSel->GetStart(&curCp);
+
+            long storyLen = 0;
+            pSel->GetStoryLength(&storyLen);
+
+            long tableDelta = 0, tableStart = 0, tableEnd = 0;
+            if (FAILED(pSel->Expand(tomTable, &tableDelta))) { pSel->Release(); pDoc2->Release(); pUnk->Release(); return false; }
+            pSel->GetStart(&tableStart); pSel->GetEnd(&tableEnd); pSel->SetRange(curCp, curCp);
+            ITextRange* pDocRange = nullptr;
+            pDoc2->Range(0, storyLen, &pDocRange);
+            BSTR text = nullptr;
+            pDocRange->GetText(&text);
+            int len = SysStringLen(text);
+
+            std::vector<int> rows;
+            for (int i = static_cast<int>(tableStart); i < tableEnd && i < len; ++i)
+                if ((unsigned short)text[i] == 0xfff9) rows.push_back(i);
+            int curCol = 0;
+            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i)
+                if ((unsigned short)text[i] == 0x07) ++curCol;
+            for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+                ITextRange2* pRowRange = nullptr; ITextRow* pRow = nullptr;
+                if (SUCCEEDED(pDoc2->Range2(*it, *it, &pRowRange)) && SUCCEEDED(pRowRange->GetRow(&pRow))) {
+                    long count = 0;
+                    if (SUCCEEDED(pRow->GetCellCount(&count)) && count > 1 && curCol < count) {
+                        pRow->SetCellIndex(curCol);
+                        if (SUCCEEDED(pRow->SetCellCount(count - 1)) && SUCCEEDED(pRow->Apply(1, tomCellStructureChangeOnly))) ok = true;
+                    }
+                    pRow->Release();
+                }
+                if (pRowRange) pRowRange->Release();
+            }
+
+            SysFreeString(text);
+            pDocRange->Release();
+            pSel->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return ok;
+}
+
 
 void RichEditView::Undo() {
     if (m_hWnd) SendMessageW(m_hWnd, EM_UNDO, 0, 0);

@@ -914,6 +914,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 case ID_FORMAT_BULLET_LIST: tipText = L"项目符号列表"; break;
                 case ID_FORMAT_NUMBER_LIST: tipText = L"编号列表"; break;
                 case ID_INSERT_IMAGE:       tipText = L"插入图片"; break;
+                case ID_INSERT_TABLE:       tipText = L"插入表格 (Ctrl+Shift+T)"; break;
                 case ID_FILE_SAVE:          tipText = L"保存笔记 (Ctrl+S)"; break;
                 default: break;
                 }
@@ -1126,6 +1127,34 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             SendMessageW(m_richEditView.GetHwnd(), EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(wss.str().c_str()));
             return 0;
         }
+
+        // 插入表格
+        case ID_INSERT_TABLE:
+            m_richEditView.InsertTable(2, 3);
+            return 0;
+
+        // 表格行列调整命令
+        case ID_TABLE_INSERT_ROW_ABOVE:
+            m_richEditView.InsertTableRow(false);
+            return 0;
+        case ID_TABLE_INSERT_ROW_BELOW:
+            m_richEditView.InsertTableRow(true);
+            return 0;
+        case ID_TABLE_INSERT_COL_LEFT:
+            m_richEditView.InsertTableColumn(false);
+            return 0;
+        case ID_TABLE_INSERT_COL_RIGHT:
+            m_richEditView.InsertTableColumn(true);
+            return 0;
+        case ID_TABLE_DELETE_ROW:
+            m_richEditView.DeleteTableRow();
+            return 0;
+        case ID_TABLE_DELETE_COL:
+            m_richEditView.DeleteTableColumn();
+            return 0;
+        case ID_TABLE_DELETE_TABLE:
+            m_richEditView.DeleteTable();
+            return 0;
 
         // 插入图片演示提示
         case ID_INSERT_IMAGE:
@@ -1482,7 +1511,25 @@ void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
     AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_4, L"标题 4(&4)\tCtrl+4");
     AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubFormat), L"格式(&O)");
 
-    // 4. 插入与查找
+    // 4. 插入与表格
+    bool inTable = m_richEditView.IsCursorInTable();
+    if (inTable) {
+        HMENU hSubTable = CreatePopupMenu();
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_ABOVE, L"在上方插入行(&A)");
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_BELOW, L"在下方插入行(&B)");
+        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_LEFT, L"在左侧插入列(&L)");
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_RIGHT, L"在右侧插入列(&R)");
+        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_ROW, L"删除当前行(&R)");
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_COL, L"删除当前列(&C)");
+        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_TABLE, L"删除表格(&T)");
+        AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubTable), L"表格(&B)");
+    } else {
+        AppendMenuW(hMenu, MF_STRING, ID_INSERT_TABLE, L"插入表格(3×2)(&T)\tCtrl+Shift+T");
+    }
+
     AppendMenuW(hMenu, MF_STRING, ID_FORMAT_CODE_BLOCK, L"插入代码块(&K)...\tCtrl+K");
     AppendMenuW(hMenu, MF_STRING, ID_INSERT_DATETIME, L"插入当前时间戳(&D)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
