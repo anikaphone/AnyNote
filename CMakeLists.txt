@@ -33,6 +33,11 @@ set(SOURCES
     src/ui/Toolbar.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
+    src/storage/Database.cpp
+    src/storage/Database.h
+    src/storage/NoteModel.h
+    src/storage/NoteRepository.cpp
+    src/storage/NoteRepository.h
     res/AnyNote.rc
     res/app.manifest
     res/resource.h
@@ -58,3 +63,24 @@ target_link_libraries(AnyNote PRIVATE
 set_property(TARGET AnyNote PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
+
+# 单元测试目标
+add_executable(test_storage
+    tests/test_storage.cpp
+    src/storage/Database.cpp
+    src/storage/Database.h
+    src/storage/NoteModel.h
+    src/storage/NoteRepository.cpp
+    src/storage/NoteRepository.h
+)
+target_include_directories(test_storage PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(test_storage PRIVATE
+    sqlite3mc::sqlite3mc_static
+    shlwapi
+)
+set_property(TARGET test_storage PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+

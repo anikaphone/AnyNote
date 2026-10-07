@@ -3,16 +3,25 @@
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
 #include <commctrl.h>
+#include <shlwapi.h>
+#include <commdlg.h>
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 namespace anynote::ui {
 
-using anynote::utils::WideToRtf;
-
 namespace {
+
+std::wstring GetDefaultNotebookPath() {
+    wchar_t exePath[MAX_PATH] = {0};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    PathRemoveFileSpecW(exePath);
+    return std::wstring(exePath) + L"\\notebook.anynote";
+}
 
 struct CodeDialogContext {
     std::wstring initialCode;
@@ -123,114 +132,101 @@ INT_PTR CALLBACK CodeDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
     return FALSE;
 }
 
-std::string BuildWelcomeNoteRtf() {
-    std::string rtf;
-    rtf += "{\\rtf1\\ansi\\deff0\\nouicompat";
-    rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}{\\f1\\fnil\\fcharset0 Consolas;}}";
-    rtf += "{\\colortbl ;\\red246\\green248\\blue250;\\red225\\green228\\blue232;\\red36\\green41\\blue47;\\red0\\green92\\blue197;\\red215\\green58\\blue73;\\red3\\green47\\blue98;\\red106\\green115\\blue125;\\red0\\green92\\blue197;\\red111\\green66\\blue193;\\red3\\green102\\blue214;}";
-    rtf += "\\viewkind4\\uc1";
-    rtf += "\\pard\\b\\fs28\\cf4 " + WideToRtf(L"欢迎使用 AnyNote - 基于 C++20 与原生 Win32 的分层树状笔记！") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf3\\b " + WideToRtf(L"★ 特性高光：") + "\\b0\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生富文本内核") + "\\b0 " + WideToRtf(L"：采用 Windows MSFTEDIT.DLL (RichEdit 5.0)，毫秒启动，极低内存；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"剪贴板图片直接粘贴") + "\\b0 " + WideToRtf(L"：按 Win+Shift+S 截图，在编辑器中按 ") + "\\b Ctrl+V\\b0 " + WideToRtf(L" 即可直接粘贴截图；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"原生代码框 (CodeBox)") + "\\b0 " + WideToRtf(L"：点击上方「代码块」或按 ") + "\\b Ctrl+K\\b0 " + WideToRtf(L"，支持多语言高亮、卡片底色与 Consolas 等宽排版；") + "\\par";
-    rtf += WideToRtf(L"• ") + "\\b " + WideToRtf(L"单文件安全存储") + "\\b0 " + WideToRtf(L"：静态集成 SQLite3MC，支持 AES-256 全库透明加密。") + "\\par\\par";
-    rtf += "\\pard\\cf3 " + WideToRtf(L"下方即为原生嵌入的代码块示例：") + "\\par\\par";
+struct PasswordPromptContext {
+    std::string password;
+    bool ok = false;
+};
 
+INT_PTR CALLBACK PasswordPromptDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_INITDIALOG:
+        SetWindowLongPtrW(hDlg, DWLP_USER, lParam);
+        SetFocus(GetDlgItem(hDlg, IDC_PASSWORD_INPUT));
+        return FALSE;
 
-    // 嵌入示例代码卡片
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"// C++ 示例代码块") + "\\par";
-    rtf += "\\cf5 #include\\cf3  <iostream>\\par\\par";
-    rtf += "\\cf4 int\\cf3  main() {\\par";
-    rtf += "    std::cout << \\cf6 \"Hello, AnyNote Native CodeBlock!\"\\cf3  << std::endl;\\par";
-    rtf += "    \\cf4 return\\cf3  0;\\par";
-    rtf += "}\\cell\\row\n";
-    rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"可以在此继续输入正文，或选中文本后按 ") + "\\b Ctrl+K\\b0 " + WideToRtf(L" 转换为代码块！") + "\\par";
-    rtf += "}";
-    return rtf;
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            auto* pCtx = reinterpret_cast<PasswordPromptContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+            if (pCtx) {
+                HWND hEdit = GetDlgItem(hDlg, IDC_PASSWORD_INPUT);
+                int len = GetWindowTextLengthW(hEdit);
+                if (len > 0) {
+                    std::wstring wPwd(len + 1, L'\0');
+                    GetWindowTextW(hEdit, wPwd.data(), len + 1);
+                    wPwd.resize(len);
+                    pCtx->password = anynote::utils::WideToUtf8(wPwd);
+                }
+                pCtx->ok = true;
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        } else if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
 }
 
-std::string BuildCppArchitectureNoteRtf() {
-    std::string rtf;
-    rtf += "{\\rtf1\\ansi\\deff0\\nouicompat";
-    rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}{\\f1\\fnil\\fcharset0 Consolas;}}";
-    rtf += "{\\colortbl ;\\red246\\green248\\blue250;\\red225\\green228\\blue232;\\red36\\green41\\blue47;\\red0\\green92\\blue197;\\red215\\green58\\blue73;\\red3\\green47\\blue98;\\red106\\green115\\blue125;\\red0\\green92\\blue197;\\red111\\green66\\blue193;\\red3\\green102\\blue214;}";
-    rtf += "\\viewkind4\\uc1";
-    rtf += "\\pard\\b\\fs26\\cf4 " + WideToRtf(L"【现代 C++ 与 Win32 架构设计】") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf3 " + WideToRtf(L"本工程采用现代 C++20 面向对象封装原生 Win32 API：") + "\\par";
-    rtf += "• \\b " + WideToRtf(L"GWLP_USERDATA 绑定") + "\\b0 " + WideToRtf(L"：将 HWND 映射为 C++ 类对象指针，无全局变量；") + "\\par";
-    rtf += "• \\b " + WideToRtf(L"Per-Monitor V2 DPI") + "\\b0 " + WideToRtf(L"：高分屏 4K 150%/200% 清晰不发虚；") + "\\par";
-    rtf += "• \\b " + WideToRtf(L"零第三方 DLL 依赖") + "\\b0 " + WideToRtf(L"：全静态链接便携发行。") + "\\par\\par";
-    rtf += "\\cf3 " + WideToRtf(L"消息分发核心代码封装实现如下：") + "\\par\\par";
+struct SetPasswordContext {
+    std::string newPassword;
+    bool removePassword = false;
+    bool ok = false;
+};
 
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"// Window 抽象基类消息路由回调") + "\\par";
-    rtf += "\\cf9 LRESULT\\cf3  \\cf9 CALLBACK\\cf3  Window::StaticWndProc(\\cf9 HWND\\cf3  hWnd, \\cf9 UINT\\cf3  uMsg, \\cf9 WPARAM\\cf3  wParam, \\cf9 LPARAM\\cf3  lParam) {\\par";
-    rtf += "    \\cf4 auto\\cf3 * pThis = \\cf4 reinterpret_cast\\cf3 <Window*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));\\par";
-    rtf += "    \\cf4 if\\cf3  (uMsg == WM_NCCREATE) {\\par";
-    rtf += "        \\cf4 auto\\cf3 * pCreate = \\cf4 reinterpret_cast\\cf3 <CREATESTRUCTW*>(lParam);\\par";
-    rtf += "        pThis = \\cf4 reinterpret_cast\\cf3 <Window*>(pCreate->lpCreateParams);\\par";
-    rtf += "        \\cf4 if\\cf3  (pThis) {\\par";
-    rtf += "            pThis->m_hWnd = hWnd;\\par";
-    rtf += "            SetWindowLongPtrW(hWnd, GWLP_USERDATA, \\cf4 reinterpret_cast\\cf3 <\\cf9 LONG_PTR\\cf3 >(pThis));\\par";
-    rtf += "        }\\par";
-    rtf += "    }\\par";
-    rtf += "    \\cf4 return\\cf3  pThis ? pThis->HandleMessage(uMsg, wParam, lParam) : DefWindowProcW(hWnd, uMsg, wParam, lParam);\\par";
-    rtf += "}\\cell\\row\n";
-    rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"这种封装方式优雅兼顾面向对象与 Win32 原生性能。") + "\\par";
-    rtf += "}";
-    return rtf;
-}
+INT_PTR CALLBACK SetPasswordDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uMsg) {
+    case WM_INITDIALOG:
+        SetWindowLongPtrW(hDlg, DWLP_USER, lParam);
+        SetFocus(GetDlgItem(hDlg, IDC_PASSWORD_NEW));
+        return FALSE;
 
-std::string BuildSqlSecurityNoteRtf() {
-    std::string rtf;
-    rtf += "{\\rtf1\\ansi\\deff0\\nouicompat";
-    rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}{\\f1\\fnil\\fcharset0 Consolas;}}";
-    rtf += "{\\colortbl ;\\red246\\green248\\blue250;\\red225\\green228\\blue232;\\red36\\green41\\blue47;\\red0\\green92\\blue197;\\red215\\green58\\blue73;\\red3\\green47\\blue98;\\red106\\green115\\blue125;\\red0\\green92\\blue197;\\red111\\green66\\blue193;\\red3\\green102\\blue214;}";
-    rtf += "\\viewkind4\\uc1";
-    rtf += "\\pard\\b\\fs26\\cf4 " + WideToRtf(L"【SQLite3MC 数据库与安全机制】") + "\\b0\\fs22\\par\\par";
-    rtf += "\\cf3 " + WideToRtf(L"SQLite3 Multiple Ciphers 支持 AES-256-CBC, AES-256-GCM 等工业级高强度加密。") + "\\par";
-    rtf += WideToRtf(L"数据库核心表结构定义如下：") + "\\par\\par";
+    case WM_COMMAND:
+        if (LOWORD(wParam) == IDOK) {
+            HWND hNew = GetDlgItem(hDlg, IDC_PASSWORD_NEW);
+            HWND hConfirm = GetDlgItem(hDlg, IDC_PASSWORD_CONFIRM);
 
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"-- 节点元数据表") + "\\par";
-    rtf += "\\cf4 CREATE TABLE IF NOT EXISTS\\cf3  nodes (\\par";
-    rtf += "    id            \\cf4 INTEGER PRIMARY KEY AUTOINCREMENT\\cf3 ,\\par";
-    rtf += "    parent_id     \\cf4 INTEGER NOT NULL DEFAULT\\cf3  0,\\par";
-    rtf += "    sequence      \\cf4 INTEGER NOT NULL DEFAULT\\cf3  0,\\par";
-    rtf += "    title         \\cf4 TEXT NOT NULL\\cf3 ,\\par";
-    rtf += "    created_time  \\cf4 INTEGER NOT NULL\\cf3 ,\\par";
-    rtf += "    modified_time \\cf4 INTEGER NOT NULL\\cf3 \\par";
-    rtf += ");\\par\\par";
-    rtf += "\\cf7 " + WideToRtf(L"-- 正文 RTF 字节流存储表") + "\\par";
-    rtf += "\\cf4 CREATE TABLE IF NOT EXISTS\\cf3  node_contents (\\par";
-    rtf += "    node_id       \\cf4 INTEGER PRIMARY KEY\\cf3 ,\\par";
-    rtf += "    format_type   \\cf4 INTEGER NOT NULL DEFAULT\\cf3  1,\\par";
-    rtf += "    content_rtf   \\cf4 BLOB\\cf3 ,\\par";
-    rtf += "    \\cf4 FOREIGN KEY\\cf3 (node_id) \\cf4 REFERENCES\\cf3  nodes(id) \\cf4 ON DELETE CASCADE\\cf3 \\par";
-    rtf += ");\\cell\\row\n";
-    rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"全库加密时执行 ") + "\\b PRAGMA key = 'password'\\b0 " + WideToRtf(L" 即可实现透明加解密。") + "\\par";
-    rtf += "}";
-    return rtf;
+            int lenNew = GetWindowTextLengthW(hNew);
+            int lenConfirm = GetWindowTextLengthW(hConfirm);
+
+            std::wstring wNew(lenNew + 1, L'\0');
+            GetWindowTextW(hNew, wNew.data(), lenNew + 1);
+            wNew.resize(lenNew);
+
+            std::wstring wConfirm(lenConfirm + 1, L'\0');
+            GetWindowTextW(hConfirm, wConfirm.data(), lenConfirm + 1);
+            wConfirm.resize(lenConfirm);
+
+            if (wNew != wConfirm) {
+                MessageBoxW(hDlg, L"两次输入的密码不一致，请核对后重新输入！", L"密码不一致", MB_OK | MB_ICONWARNING);
+                SetFocus(hConfirm);
+                return TRUE;
+            }
+
+            auto* pCtx = reinterpret_cast<SetPasswordContext*>(GetWindowLongPtrW(hDlg, DWLP_USER));
+            if (pCtx) {
+                if (wNew.empty()) {
+                    if (MessageBoxW(hDlg, L"确定要解除密码加密，将笔记本转换为明文格式存储吗？", L"确认解除加密", MB_YESNO | MB_ICONQUESTION) != IDYES) {
+                        return TRUE;
+                    }
+                    pCtx->removePassword = true;
+                    pCtx->newPassword = "";
+                } else {
+                    pCtx->newPassword = anynote::utils::WideToUtf8(wNew);
+                    pCtx->removePassword = false;
+                }
+                pCtx->ok = true;
+            }
+            EndDialog(hDlg, IDOK);
+            return TRUE;
+        } else if (LOWORD(wParam) == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    }
+    return FALSE;
 }
 
 } // namespace
@@ -317,7 +313,6 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     // 4. 初始化左侧目录树
     m_treeView.Initialize(m_hWnd, 0, toolbarH, m_splitterPos, clientH - toolbarH - statusbarH, IDC_MAIN_TREEVIEW);
-    m_treeView.PopulateSampleNodes();
 
     // 5. 初始化右侧富文本编辑器
     if (!m_richEditView.Initialize(
@@ -329,14 +324,8 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         return false;
     }
 
-    // 加载当前树节点内容 (含原生嵌入代码块展示)
-    m_activeItem = m_treeView.GetSelectedItem();
-    if (m_activeItem) {
-        LoadNoteForItem(m_activeItem);
-        UpdateStatusBar(L"当前笔记: " + m_treeView.GetItemText(m_activeItem));
-    } else {
-        m_richEditView.StreamInRTF(BuildWelcomeNoteRtf());
-    }
+    // 6. 打开默认便携笔记本并从数据库加载节点树
+    OpenNotebook(GetDefaultNotebookPath(), "");
 
     LayoutChildren(clientW, clientH);
     Show(nCmdShow);
@@ -373,6 +362,16 @@ void MainWindow::UpdateStatusBar(const std::wstring& text) {
     }
 }
 
+void MainWindow::UpdateEncryptionStatusUI() {
+    if (!m_hStatusBar) return;
+
+    if (m_db && m_db->IsEncrypted()) {
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 已加密 (AES-256)"));
+    } else {
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 未加密"));
+    }
+}
+
 void MainWindow::ShowInsertCodeDialog() {
     CodeDialogContext ctx;
     ctx.initialCode = m_richEditView.GetSelectedText();
@@ -390,50 +389,138 @@ void MainWindow::ShowInsertCodeDialog() {
     }
 }
 
-void MainWindow::SaveActiveNote() {
-    if (!m_activeItem || !m_richEditView.GetHwnd()) return;
-
-    m_noteRtfByItem[m_activeItem] = m_richEditView.StreamOutRTF();
-}
-
-void MainWindow::LoadNoteForItem(HTREEITEM hItem) {
-    if (!hItem || !m_richEditView.GetHwnd()) return;
-
-    const auto saved = m_noteRtfByItem.find(hItem);
-    if (saved != m_noteRtfByItem.end()) {
-        if (!saved->second.empty() && m_richEditView.StreamInRTF(saved->second)) {
-            return;
-        }
-        m_richEditView.SetText(L"");
-        return;
+bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& password) {
+    if (m_activeNoteId > 0) {
+        SaveActiveNote();
+        m_activeNoteId = 0;
     }
 
-    switch (m_treeView.GetItemData(hItem)) {
-    case 1:
-        m_richEditView.StreamInRTF(BuildWelcomeNoteRtf());
-        break;
-    case 2:
-        m_richEditView.SetText(
-            L"【快速上手指南】\r\n\r\n"
-            L"1. 在左侧树形目录中右键或使用菜单添加同级或子笔记；\r\n"
-            L"2. 点击上方工具栏按钮或使用快捷键进行加粗 (Ctrl+B)、斜体 (Ctrl+I)；\r\n"
-            L"3. 按 Ctrl+K 或点击「代码块」按钮，弹出代码框配置窗口，选择语言即可一键插入高亮代码块；\r\n"
-            L"4. 任意复制微信/QQ/系统截图，在右侧编辑器中直接按 Ctrl+V 即可粘贴图片！"
+    auto newDb = std::make_unique<storage::Database>();
+    std::string currentPwd = password;
+
+    bool opened = newDb->Open(filePath, currentPwd);
+    while (!opened && newDb->GetLastError() == "ENCRYPTED_REQUIRES_PASSWORD") {
+        PasswordPromptContext ctx;
+        INT_PTR res = DialogBoxParamW(
+            GetModuleHandleW(nullptr),
+            MAKEINTRESOURCEW(IDD_ENTER_PASSWORD),
+            m_hWnd,
+            PasswordPromptDialogProc,
+            reinterpret_cast<LPARAM>(&ctx)
         );
-        break;
-    case 5:
-        m_richEditView.StreamInRTF(BuildCppArchitectureNoteRtf());
-        break;
-    case 6:
-        m_richEditView.StreamInRTF(BuildSqlSecurityNoteRtf());
-        break;
-    case 7:
-        m_richEditView.StreamInRTF(BuildWelcomeNoteRtf());
-        break;
-    default:
-        // 新建或暂无示例内容的节点必须显示为空白，避免沿用上一节点内容。
+
+        if (res != IDOK || !ctx.ok) {
+            return false;
+        }
+
+        currentPwd = ctx.password;
+        opened = newDb->Open(filePath, currentPwd);
+        if (!opened) {
+            MessageBoxW(m_hWnd, L"密码不正确，无法解密该笔记本！请重新输入。", L"密码错误", MB_OK | MB_ICONERROR);
+        }
+    }
+
+    if (!opened) {
+        std::wstring err = anynote::utils::Utf8ToWide(newDb->GetLastError());
+        MessageBoxW(m_hWnd, (L"无法打开笔记本文件：\r\n" + err).c_str(), L"打开失败", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    auto newRepo = std::make_unique<storage::NoteRepository>(*newDb);
+    if (!newRepo->InitializeSchema()) {
+        MessageBoxW(m_hWnd, L"初始化笔记本表结构失败！", L"数据库错误", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    if (newRepo->GetNodeCount() == 0) {
+        newRepo->CreateDefaultWelcomeNotes();
+    }
+
+    m_db = std::move(newDb);
+    m_repo = std::move(newRepo);
+    m_currentNotebookPath = filePath;
+
+    // 更新窗口标题
+    std::wstring fileName = filePath;
+    size_t slashPos = fileName.find_last_of(L"\\/");
+    if (slashPos != std::wstring::npos) {
+        fileName = fileName.substr(slashPos + 1);
+    }
+    std::wstring title = L"AnyNote - [" + fileName + L"]";
+    SetWindowTextW(m_hWnd, title.c_str());
+
+    UpdateEncryptionStatusUI();
+    PopulateTreeViewFromDb();
+
+    return true;
+}
+
+void MainWindow::PopulateTreeViewFromDb() {
+    m_treeView.ClearAll();
+    m_activeNoteId = 0;
+    if (!m_repo) return;
+
+    auto nodes = m_repo->GetAllNodes();
+    if (nodes.empty()) return;
+
+    std::unordered_map<int64_t, HTREEITEM> idToItem;
+    std::vector<storage::NoteNode> remaining = std::move(nodes);
+
+    bool insertedAny = true;
+    while (!remaining.empty() && insertedAny) {
+        insertedAny = false;
+        std::vector<storage::NoteNode> nextRemaining;
+        for (auto& node : remaining) {
+            if (node.parentId == 0) {
+                HTREEITEM hItem = m_treeView.InsertNode(nullptr, node.title, static_cast<LPARAM>(node.id), true);
+                idToItem[node.id] = hItem;
+                insertedAny = true;
+            } else {
+                auto it = idToItem.find(node.parentId);
+                if (it != idToItem.end()) {
+                    HTREEITEM hItem = m_treeView.InsertNode(it->second, node.title, static_cast<LPARAM>(node.id), true);
+                    idToItem[node.id] = hItem;
+                    insertedAny = true;
+                } else {
+                    nextRemaining.push_back(std::move(node));
+                }
+            }
+        }
+        remaining = std::move(nextRemaining);
+    }
+
+    // 孤儿节点（父节点不存在）安全挂在根目录下展示
+    for (const auto& orphan : remaining) {
+        HTREEITEM hItem = m_treeView.InsertNode(nullptr, orphan.title, static_cast<LPARAM>(orphan.id), true);
+        idToItem[orphan.id] = hItem;
+    }
+
+    // 默认选中第一个根节点
+    HTREEITEM hRoot = TreeView_GetRoot(m_treeView.GetHwnd());
+    if (hRoot) {
+        m_treeView.SelectItem(hRoot);
+    }
+}
+
+void MainWindow::SaveActiveNote() {
+    if (m_activeNoteId <= 0 || !m_repo || !m_richEditView.GetHwnd()) return;
+
+    std::string rtf = m_richEditView.StreamOutRTF();
+    m_repo->UpdateNoteContent(m_activeNoteId, rtf);
+
+    if (m_hStatusBar) {
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
+    }
+}
+
+void MainWindow::LoadNoteForId(int64_t nodeId) {
+    if (nodeId <= 0 || !m_repo || !m_richEditView.GetHwnd()) return;
+
+    std::string rtf = m_repo->GetNoteContent(nodeId);
+    if (!rtf.empty()) {
+        m_richEditView.StreamInRTF(rtf);
+    } else {
         m_richEditView.SetText(L"");
-        break;
     }
 }
 
@@ -445,23 +532,24 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
             SaveActiveNote();
             m_richEditView.SetText(L"");
         }
-        m_activeItem = nullptr;
+        m_activeNoteId = 0;
         UpdateStatusBar(L"未选择笔记");
         return;
     }
 
     HTREEITEM newItem = pNmtv->itemNew.hItem;
+    int64_t newId = static_cast<int64_t>(m_treeView.GetItemData(newItem));
     std::wstring title = m_treeView.GetItemText(newItem);
     UpdateStatusBar(L"当前笔记: " + title);
 
-    // 树控件在窗口初始化时可能先发出选择通知，此时编辑器尚未创建。
     if (!m_richEditView.GetHwnd()) return;
 
-    if (m_activeItem && m_activeItem != newItem) {
+    if (m_activeNoteId > 0 && m_activeNoteId != newId) {
         SaveActiveNote();
     }
-    LoadNoteForItem(newItem);
-    m_activeItem = newItem;
+
+    m_activeNoteId = newId;
+    LoadNoteForId(newId);
 }
 
 LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -469,6 +557,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_EDITOR_FORMAT_CHANGED:
         m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
         return 0;
+
     case WM_SIZE: {
         int width = LOWORD(lParam);
         int height = HIWORD(lParam);
@@ -513,6 +602,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             } else if (pNmhdr->code == TVN_ENDLABELEDITW) {
                 auto* pDispInfo = reinterpret_cast<NMTVDISPINFOW*>(lParam);
                 if (pDispInfo->item.pszText && wcslen(pDispInfo->item.pszText) > 0) {
+                    int64_t nodeId = static_cast<int64_t>(m_treeView.GetItemData(pDispInfo->item.hItem));
+                    if (m_repo) {
+                        m_repo->UpdateNoteTitle(nodeId, pDispInfo->item.pszText);
+                    }
                     m_treeView.SetItemText(pDispInfo->item.hItem, pDispInfo->item.pszText);
                     UpdateStatusBar(L"当前笔记: " + std::wstring(pDispInfo->item.pszText));
                     return TRUE;
@@ -632,17 +725,31 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         // 树节点增删
         case ID_FILE_NEW_NOTE: {
+            SaveActiveNote();
             HTREEITEM hCur = m_treeView.GetSelectedItem();
             HTREEITEM hParent = hCur ? TreeView_GetParent(m_treeView.GetHwnd(), hCur) : nullptr;
-            HTREEITEM hNew = m_treeView.InsertNode(hParent, L"新建笔记", 100, true);
-            if (hNew) m_treeView.SelectItem(hNew);
+            int64_t parentId = hParent ? static_cast<int64_t>(m_treeView.GetItemData(hParent)) : 0;
+            int64_t newId = m_repo ? m_repo->CreateNote(parentId, L"新建笔记", -1, 0, "") : 0;
+
+            HTREEITEM hNew = m_treeView.InsertNode(hParent, L"新建笔记", static_cast<LPARAM>(newId), true);
+            if (hNew) {
+                m_treeView.SelectItem(hNew);
+                SetFocus(m_treeView.GetHwnd());
+                TreeView_EditLabel(m_treeView.GetHwnd(), hNew);
+            }
             return 0;
         }
         case ID_FILE_NEW_SUB_NOTE: {
+            SaveActiveNote();
             HTREEITEM hCur = m_treeView.GetSelectedItem();
-            if (hCur) {
-                HTREEITEM hNew = m_treeView.InsertNode(hCur, L"新建子笔记", 101, true);
-                if (hNew) m_treeView.SelectItem(hNew);
+            int64_t parentId = hCur ? static_cast<int64_t>(m_treeView.GetItemData(hCur)) : 0;
+            int64_t newId = m_repo ? m_repo->CreateNote(parentId, L"新建子笔记", -1, 0, "") : 0;
+
+            HTREEITEM hNew = m_treeView.InsertNode(hCur, L"新建子笔记", static_cast<LPARAM>(newId), true);
+            if (hNew) {
+                m_treeView.SelectItem(hNew);
+                SetFocus(m_treeView.GetHwnd());
+                TreeView_EditLabel(m_treeView.GetHwnd(), hNew);
             }
             return 0;
         }
@@ -656,33 +763,92 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
         case ID_FILE_DELETE_NOTE: {
             HTREEITEM hCur = m_treeView.GetSelectedItem();
-            if (hCur && MessageBoxW(m_hWnd, L"确定要删除当前选中的笔记吗？", L"确认删除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            if (hCur && MessageBoxW(m_hWnd, L"确定要删除当前选中的笔记及其所有子笔记吗？此操作无法撤销。", L"确认删除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+                int64_t nodeId = static_cast<int64_t>(m_treeView.GetItemData(hCur));
+                if (m_activeNoteId == nodeId) {
+                    m_activeNoteId = 0;
+                    m_richEditView.SetText(L"");
+                }
+                if (m_repo) {
+                    m_repo->DeleteNote(nodeId);
+                }
                 m_treeView.DeleteItem(hCur);
-                m_noteRtfByItem.erase(hCur);
             }
             return 0;
         }
 
         case ID_FILE_SAVE:
-            UpdateStatusBar(L"笔记本已保存 (内存/缓存)");
+            SaveActiveNote();
+            UpdateStatusBar(L"笔记本已保存至数据库");
             if (m_hStatusBar) {
                 SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
             }
             return 0;
 
-        case ID_SECURITY_ENCRYPT:
-            MessageBoxW(
-                m_hWnd,
-                L"AnyNote 深度集成了 sqlite3mc (SQLite Multiple Ciphers)。\r\n在阶段 2 中将连接数据库全库 AES-256 加密管线！",
-                L"笔记本安全加密",
-                MB_OK | MB_ICONINFORMATION
-            );
+        case ID_FILE_NEW_NOTEBOOK: {
+            wchar_t szFile[MAX_PATH] = L"MyNotebook.anynote";
+            OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+            ofn.hwndOwner = m_hWnd;
+            ofn.lpstrFilter = L"AnyNote 笔记本 (*.anynote)\0*.anynote\0所有文件 (*.*)\0*.*\0";
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrDefExt = L"anynote";
+            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+
+            if (GetSaveFileNameW(&ofn)) {
+                OpenNotebook(szFile, "");
+            }
             return 0;
+        }
+
+        case ID_FILE_OPEN_NOTEBOOK: {
+            wchar_t szFile[MAX_PATH] = {0};
+            OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+            ofn.hwndOwner = m_hWnd;
+            ofn.lpstrFilter = L"AnyNote 笔记本 (*.anynote)\0*.anynote\0所有文件 (*.*)\0*.*\0";
+            ofn.lpstrFile = szFile;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+
+            if (GetOpenFileNameW(&ofn)) {
+                OpenNotebook(szFile, "");
+            }
+            return 0;
+        }
+
+        case ID_SECURITY_ENCRYPT: {
+            if (!m_db || !m_db->IsOpen()) {
+                MessageBoxW(m_hWnd, L"尚未打开任何笔记本！", L"提示", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            SetPasswordContext ctx;
+            INT_PTR res = DialogBoxParamW(
+                GetModuleHandleW(nullptr),
+                MAKEINTRESOURCEW(IDD_SET_PASSWORD),
+                m_hWnd,
+                SetPasswordDialogProc,
+                reinterpret_cast<LPARAM>(&ctx)
+            );
+            if (res == IDOK && ctx.ok) {
+                if (m_db->SetPassword(ctx.newPassword)) {
+                    UpdateEncryptionStatusUI();
+                    if (ctx.removePassword) {
+                        MessageBoxW(m_hWnd, L"已成功解除密码，当前笔记本为未加密明文存储。", L"成功", MB_OK | MB_ICONINFORMATION);
+                    } else {
+                        MessageBoxW(m_hWnd, L"密码设置成功！全库已采用 AES-256 高强度加密。\r\n下次打开该文件时需要输入此密码。", L"成功", MB_OK | MB_ICONINFORMATION);
+                    }
+                } else {
+                    std::wstring err = anynote::utils::Utf8ToWide(m_db->GetLastError());
+                    MessageBoxW(m_hWnd, (L"修改密码失败：\r\n" + err).c_str(), L"错误", MB_OK | MB_ICONERROR);
+                }
+            }
+            return 0;
+        }
 
         case ID_HELP_ABOUT:
             MessageBoxW(
                 m_hWnd,
-                L"AnyNote v1.0.0 (Preview)\r\n\r\n基于 C++20 与原生 Win32 API 打造的高性能树状富文本笔记软件。\r\n• 编辑内核: Windows RichEdit 5.0\r\n• 数据存储: SQLite3MC (静态集成)",
+                L"AnyNote v1.0.0 (Preview)\r\n\r\n基于 C++20 与原生 Win32 API 打造的高性能树状富文本笔记软件。\r\n• 编辑内核: Windows RichEdit 5.0 (MSFTEDIT.DLL)\r\n• 数据存储: SQLite3MC (AES-256 全库透明加密)\r\n• 特色特性: 代码框卡片、标题阶梯层级、便携零第三方依赖",
                 L"关于 AnyNote",
                 MB_OK | MB_ICONINFORMATION
             );
@@ -695,8 +861,16 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         break;
     }
 
+    case WM_CLOSE:
+        SaveActiveNote();
+        DestroyWindow(m_hWnd);
+        return 0;
+
     case WM_DESTROY:
         SaveActiveNote();
+        if (m_db) {
+            m_db->Close();
+        }
         PostQuitMessage(0);
         return 0;
     }

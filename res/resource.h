@@ -8,6 +8,8 @@
 #define IDR_ACCELERATOR         102
 #define IDI_APP_ICON            103
 #define IDD_INSERT_CODE         104
+#define IDD_SET_PASSWORD        105
+#define IDD_ENTER_PASSWORD      106
 
 // File Commands
 #define ID_FILE_NEW_NOTE        1001
@@ -62,3 +64,8 @@
 // Code Block Dialog IDs
 #define IDC_CODE_LANG           2101
 #define IDC_CODE_TEXT           2102
+
+// Password Dialog IDs
+#define IDC_PASSWORD_NEW        2201
+#define IDC_PASSWORD_CONFIRM    2202
+#define IDC_PASSWORD_INPUT      2203

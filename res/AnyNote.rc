@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include "resource.h"
 
 // 主菜单
@@ -99,3 +99,31 @@ BEGIN
     DEFPUSHBUTTON   "插入代码块(&I)", IDOK, 218, 214, 64, 16
     PUSHBUTTON      "取消(&C)", IDCANCEL, 288, 214, 60, 16
 END
+
+// 设置/修改密码对话框
+IDD_SET_PASSWORD DIALOGEX 0, 0, 240, 140
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "设置 / 修改笔记本密码"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "新密码(&P) (留空表示解除加密):", IDC_STATIC, 16, 14, 208, 10
+    EDITTEXT        IDC_PASSWORD_NEW, 16, 26, 208, 14, ES_PASSWORD | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP
+    LTEXT           "确认新密码(&C):", IDC_STATIC, 16, 48, 208, 10
+    EDITTEXT        IDC_PASSWORD_CONFIRM, 16, 60, 208, 14, ES_PASSWORD | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP
+    LTEXT           "提示：若设置密码，整个数据库将以 AES-256 加密保存。请务必牢记密码！", IDC_STATIC, 16, 82, 208, 24
+    DEFPUSHBUTTON   "确定(&O)", IDOK, 112, 114, 52, 16
+    PUSHBUTTON      "取消(&C)", IDCANCEL, 172, 114, 52, 16
+END
+
+// 输入密码解密对话框
+IDD_ENTER_PASSWORD DIALOGEX 0, 0, 240, 95
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "输入笔记本密码"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "该笔记本已加密，请输入密码解密打开：", IDC_STATIC, 16, 14, 208, 10
+    EDITTEXT        IDC_PASSWORD_INPUT, 16, 28, 208, 14, ES_PASSWORD | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP
+    DEFPUSHBUTTON   "确定(&O)", IDOK, 112, 66, 52, 16
+    PUSHBUTTON      "取消(&C)", IDCANCEL, 172, 66, 52, 16
+END
+
