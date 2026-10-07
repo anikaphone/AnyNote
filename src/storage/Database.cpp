@@ -113,23 +113,24 @@ void Database::Close() {
 bool Database::SetPassword(const std::string& newPassword) {
     if (!m_db) return false;
 
-    int rc = 0;
-    if (newPassword.empty()) {
-        // 解除加密为明文库
-        rc = sqlite3_rekey(m_db, nullptr, 0);
-        if (rc == SQLITE_OK) {
-            m_isEncrypted = false;
-        }
-    } else {
-        // 设置或修改密码
-        rc = sqlite3_rekey(m_db, newPassword.data(), static_cast<int>(newPassword.size()));
-        if (rc == SQLITE_OK) {
-            m_isEncrypted = true;
-        }
-    }
+    // SQLite3MC 不允许在 WAL 模式下加密明文数据库，先切换 journal。
+    if (!Execute("PRAGMA journal_mode = DELETE;")) return false;
+
+    int rc = newPassword.empty()
+        ? sqlite3_rekey(m_db, nullptr, 0)
+        : sqlite3_rekey(m_db, newPassword.data(), static_cast<int>(newPassword.size()));
 
     if (rc != SQLITE_OK) {
         m_lastError = sqlite3_errmsg(m_db);
+        std::string rekeyError = m_lastError;
+        Execute("PRAGMA journal_mode = WAL;");
+        m_lastError = std::move(rekeyError);
+        return false;
+    }
+
+    m_isEncrypted = !newPassword.empty();
+
+    if (!Execute("PRAGMA journal_mode = WAL;")) {
         return false;
     }
 

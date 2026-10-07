@@ -1,6 +1,9 @@
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
 #include <iostream>
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
 #include <cassert>
 #include <filesystem>
 
@@ -51,7 +54,11 @@ int main() {
 
         // 设置 AES-256 加密密码
         std::cout << "[TEST] 2. Encrypting database with password 'secret123'..." << std::endl;
-        assert(db.SetPassword("secret123"));
+        bool encrypted = db.SetPassword("secret123");
+        if (!encrypted) {
+            std::cerr << "[TEST] SetPassword failed: " << db.GetLastError() << std::endl;
+        }
+        assert(encrypted);
         assert(db.IsEncrypted());
 
         db.Close();
@@ -109,6 +116,40 @@ int main() {
         assert(db.Open(dbPath, ""));
         assert(db.IsOpen());
         assert(!db.IsEncrypted());
+
+        NoteRepository repo(db);
+
+        // 创建测试树结构：
+        // Root A (seq 0)
+        //   - Child A1 (seq 0)
+        //   - Child A2 (seq 1)
+        // Root B (seq 1)
+        std::cout << "[TEST] 9. Testing MoveNode (Drag and Drop operations)..." << std::endl;
+        int64_t rootA = repo.CreateNote(0, L"Root A", 0);
+        int64_t childA1 = repo.CreateNote(rootA, L"Child A1", 0);
+        int64_t childA2 = repo.CreateNote(rootA, L"Child A2", 1);
+        int64_t rootB = repo.CreateNote(0, L"Root B", 1);
+
+        // 9.1 测试 Reorder: 将 Child A2 移动到 Child A1 之前 (Before)
+        assert(repo.MoveNode(childA2, childA1, DropPosition::Before));
+        auto nodeA2 = repo.GetNode(childA2);
+        auto nodeA1 = repo.GetNode(childA1);
+        assert(nodeA2->parentId == rootA && nodeA2->sequence == 0);
+        assert(nodeA1->parentId == rootA && nodeA1->sequence == 1);
+
+        // 9.2 测试 AsChild: 将 Child A1 移动到 Root B 之下作为子节点
+        assert(repo.MoveNode(childA1, rootB, DropPosition::AsChild));
+        nodeA1 = repo.GetNode(childA1);
+        assert(nodeA1->parentId == rootB && nodeA1->sequence == 0);
+
+        // 9.3 测试 AtRootEnd: 将 Child A2 移动到根节点末尾
+        assert(repo.MoveNode(childA2, 0, DropPosition::AtRootEnd));
+        nodeA2 = repo.GetNode(childA2);
+        assert(nodeA2->parentId == 0);
+
+        // 9.4 测试循环依赖防护: 不能将 Root B 移动到自己的子节点 Child A1 之下
+        assert(!repo.MoveNode(rootB, childA1, DropPosition::AsChild));
+
         db.Close();
     }
 

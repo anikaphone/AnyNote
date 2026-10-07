@@ -32,10 +32,11 @@ private:
     void ShowInsertCodeDialog();
 
     bool OpenNotebook(const std::wstring& filePath, const std::string& password = "");
-    void PopulateTreeViewFromDb();
+    void PopulateTreeViewFromDb(int64_t selectNodeId = 0);
     bool SaveActiveNote();
     void LoadNoteForId(int64_t nodeId);
     void UpdateEncryptionStatusUI();
+    void CancelDragOperation();
 
     Toolbar m_toolbar;
     Splitter m_splitter;
@@ -48,6 +49,13 @@ private:
     int64_t m_activeNoteId = 0;
     std::wstring m_currentNotebookPath;
     bool m_revertingTreeSelection = false;
+
+    // 目录树拖拽重排与移动状态
+    bool m_isDragging = false;
+    HTREEITEM m_hDragItem = nullptr;
+    HTREEITEM m_hDropTarget = nullptr;
+    storage::DropPosition m_dropPosition = storage::DropPosition::None;
+    HIMAGELIST m_hDragImageList = nullptr;
 
     int m_splitterPos = 260; // 默认分割条 X 坐标
 };

@@ -34,6 +34,9 @@ bool TreeView::Initialize(HWND hParent, int x, int y, int width, int height, UIN
     // 启用现代 Windows 资源管理器视觉主题 (现代箭头折叠按钮)
     SetWindowTheme(m_hWnd, L"Explorer", nullptr);
 
+    // 设置拖拽插入标记线的主题颜色 (Windows 现代蓝)
+    SendMessageW(m_hWnd, TVM_SETINSERTMARKCOLOR, 0, static_cast<LPARAM>(RGB(0, 120, 215)));
+
     // 设置标准现代 UI 字体 (先清理可能已存在的旧字体句柄，防止 GDI 泄漏)
     if (m_hFont) {
         DeleteObject(m_hFont);
@@ -153,6 +156,68 @@ void TreeView::SetItemData(HTREEITEM hItem, LPARAM data) {
     tvi.lParam = data;
 
     TreeView_SetItem(m_hWnd, &tvi);
+}
+
+HTREEITEM TreeView::HitTest(POINT pt, UINT* pFlags) const {
+    if (!m_hWnd) return nullptr;
+    TVHITTESTINFO ht = {};
+    ht.pt = pt;
+    HTREEITEM hItem = TreeView_HitTest(m_hWnd, &ht);
+    if (pFlags) *pFlags = ht.flags;
+    return hItem;
+}
+
+RECT TreeView::GetItemRect(HTREEITEM hItem, bool textOnly) const {
+    RECT rc = {};
+    if (!m_hWnd || !hItem) return rc;
+    *(reinterpret_cast<HTREEITEM*>(&rc)) = hItem;
+    TreeView_GetItemRect(m_hWnd, hItem, &rc, textOnly ? TRUE : FALSE);
+    return rc;
+}
+
+void TreeView::SetInsertMark(HTREEITEM hItem, bool after) {
+    if (m_hWnd) {
+        SendMessageW(m_hWnd, TVM_SETINSERTMARK, after ? TRUE : FALSE, reinterpret_cast<LPARAM>(hItem));
+    }
+}
+
+void TreeView::ClearInsertMark() {
+    if (m_hWnd) {
+        SendMessageW(m_hWnd, TVM_SETINSERTMARK, 0, 0);
+    }
+}
+
+void TreeView::SetDropHighlight(HTREEITEM hItem) {
+    if (m_hWnd) {
+        TreeView_SelectDropTarget(m_hWnd, hItem);
+    }
+}
+
+void TreeView::ClearDropHighlight() {
+    if (m_hWnd) {
+        TreeView_SelectDropTarget(m_hWnd, nullptr);
+    }
+}
+
+void TreeView::EnsureVisible(HTREEITEM hItem) {
+    if (m_hWnd && hItem) {
+        TreeView_EnsureVisible(m_hWnd, hItem);
+    }
+}
+
+HTREEITEM TreeView::GetParentItem(HTREEITEM hItem) const {
+    if (!m_hWnd || !hItem) return nullptr;
+    return TreeView_GetParent(m_hWnd, hItem);
+}
+
+bool TreeView::IsDescendant(HTREEITEM hParent, HTREEITEM hChild) const {
+    if (!m_hWnd || !hParent || !hChild) return false;
+    HTREEITEM hCur = hChild;
+    while (hCur) {
+        if (hCur == hParent) return true;
+        hCur = TreeView_GetParent(m_hWnd, hCur);
+    }
+    return false;
 }
 
 void TreeView::PopulateSampleNodes() {

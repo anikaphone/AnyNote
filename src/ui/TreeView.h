@@ -29,6 +29,16 @@ public:
     LPARAM GetItemData(HTREEITEM hItem) const;
     void SetItemData(HTREEITEM hItem, LPARAM data);
 
+    HTREEITEM HitTest(POINT pt, UINT* pFlags = nullptr) const;
+    RECT GetItemRect(HTREEITEM hItem, bool textOnly = false) const;
+    void SetInsertMark(HTREEITEM hItem, bool after);
+    void ClearInsertMark();
+    void SetDropHighlight(HTREEITEM hItem);
+    void ClearDropHighlight();
+    void EnsureVisible(HTREEITEM hItem);
+    HTREEITEM GetParentItem(HTREEITEM hItem) const;
+    bool IsDescendant(HTREEITEM hParent, HTREEITEM hChild) const;
+
     void PopulateSampleNodes();
 
 private:

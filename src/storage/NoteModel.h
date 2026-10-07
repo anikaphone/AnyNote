@@ -5,6 +5,14 @@
 
 namespace anynote::storage {
 
+enum class DropPosition {
+    None,
+    AsChild,
+    Before,
+    After,
+    AtRootEnd
+};
+
 struct NoteNode {
     int64_t id = 0;
     int64_t parentId = 0;

@@ -452,7 +452,28 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     return true;
 }
 
-void MainWindow::PopulateTreeViewFromDb() {
+void MainWindow::CancelDragOperation() {
+    if (!m_isDragging) return;
+
+    m_isDragging = false;
+    ReleaseCapture();
+
+    if (m_hDragImageList) {
+        ImageList_DragLeave(m_hWnd);
+        ImageList_EndDrag();
+        ImageList_Destroy(m_hDragImageList);
+        m_hDragImageList = nullptr;
+    }
+
+    m_treeView.ClearInsertMark();
+    m_treeView.ClearDropHighlight();
+    m_hDragItem = nullptr;
+    m_hDropTarget = nullptr;
+    m_dropPosition = storage::DropPosition::None;
+    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+}
+
+void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
     m_treeView.ClearAll();
     m_activeNoteId = 0;
     if (!m_repo) return;
@@ -492,10 +513,21 @@ void MainWindow::PopulateTreeViewFromDb() {
         idToItem[orphan.id] = hItem;
     }
 
-    // 默认选中第一个根节点
-    HTREEITEM hRoot = TreeView_GetRoot(m_treeView.GetHwnd());
-    if (hRoot) {
-        m_treeView.SelectItem(hRoot);
+    HTREEITEM hToSelect = nullptr;
+    if (selectNodeId > 0) {
+        auto it = idToItem.find(selectNodeId);
+        if (it != idToItem.end()) {
+            hToSelect = it->second;
+        }
+    }
+
+    if (!hToSelect) {
+        hToSelect = TreeView_GetRoot(m_treeView.GetHwnd());
+    }
+
+    if (hToSelect) {
+        m_treeView.SelectItem(hToSelect);
+        m_treeView.EnsureVisible(hToSelect);
     }
 }
 
@@ -598,14 +630,178 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
+    case WM_MOUSEMOVE: {
+        if (m_isDragging) {
+            POINT ptScreen;
+            GetCursorPos(&ptScreen);
+
+            if (m_hDragImageList) {
+                POINT ptMain = ptScreen;
+                ScreenToClient(m_hWnd, &ptMain);
+                ImageList_DragMove(ptMain.x, ptMain.y);
+            }
+
+            POINT ptTree = ptScreen;
+            ScreenToClient(m_treeView.GetHwnd(), &ptTree);
+
+            RECT rcTree;
+            GetClientRect(m_treeView.GetHwnd(), &rcTree);
+
+            // 自动向上/向下滚动
+            if (ptTree.y < 24) {
+                SendMessageW(m_treeView.GetHwnd(), WM_VSCROLL, SB_LINEUP, 0);
+            } else if (ptTree.y > rcTree.bottom - 24) {
+                SendMessageW(m_treeView.GetHwnd(), WM_VSCROLL, SB_LINEDOWN, 0);
+            }
+
+            if (PtInRect(&rcTree, ptTree)) {
+                UINT flags = 0;
+                HTREEITEM hHit = m_treeView.HitTest(ptTree, &flags);
+
+                if (hHit) {
+                    if (hHit == m_hDragItem || m_treeView.IsDescendant(m_hDragItem, hHit)) {
+                        if (m_hDragImageList) ImageList_DragShowNolock(FALSE);
+                        m_treeView.ClearInsertMark();
+                        m_treeView.ClearDropHighlight();
+                        if (m_hDragImageList) ImageList_DragShowNolock(TRUE);
+
+                        m_hDropTarget = nullptr;
+                        m_dropPosition = storage::DropPosition::None;
+                        SetCursor(LoadCursorW(nullptr, IDC_NO));
+                    } else {
+                        RECT rcItem = m_treeView.GetItemRect(hHit, false);
+                        int itemH = rcItem.bottom - rcItem.top;
+                        int relY = ptTree.y - rcItem.top;
+
+                        if (m_hDragImageList) ImageList_DragShowNolock(FALSE);
+
+                        if (relY < itemH / 4) {
+                            m_dropPosition = storage::DropPosition::Before;
+                            m_hDropTarget = hHit;
+                            m_treeView.ClearDropHighlight();
+                            m_treeView.SetInsertMark(hHit, false);
+                        } else if (relY > itemH * 3 / 4) {
+                            m_dropPosition = storage::DropPosition::After;
+                            m_hDropTarget = hHit;
+                            m_treeView.ClearDropHighlight();
+                            m_treeView.SetInsertMark(hHit, true);
+                        } else {
+                            m_dropPosition = storage::DropPosition::AsChild;
+                            m_hDropTarget = hHit;
+                            m_treeView.ClearInsertMark();
+                            m_treeView.SetDropHighlight(hHit);
+                        }
+
+                        if (m_hDragImageList) ImageList_DragShowNolock(TRUE);
+                        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                    }
+                } else {
+                    // 拖拽到底部空白区 -> 放置为根节点末尾
+                    if (m_hDragImageList) ImageList_DragShowNolock(FALSE);
+                    m_treeView.ClearInsertMark();
+                    m_treeView.ClearDropHighlight();
+                    if (m_hDragImageList) ImageList_DragShowNolock(TRUE);
+
+                    m_hDropTarget = nullptr;
+                    m_dropPosition = storage::DropPosition::AtRootEnd;
+                    SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+                }
+            } else {
+                // 移出树控件区域
+                if (m_hDragImageList) ImageList_DragShowNolock(FALSE);
+                m_treeView.ClearInsertMark();
+                m_treeView.ClearDropHighlight();
+                if (m_hDragImageList) ImageList_DragShowNolock(TRUE);
+
+                m_hDropTarget = nullptr;
+                m_dropPosition = storage::DropPosition::None;
+                SetCursor(LoadCursorW(nullptr, IDC_NO));
+            }
+            return 0;
+        }
+        break;
+    }
+
+    case WM_LBUTTONUP: {
+        if (m_isDragging) {
+            m_isDragging = false;
+            ReleaseCapture();
+
+            if (m_hDragImageList) {
+                ImageList_DragLeave(m_hWnd);
+                ImageList_EndDrag();
+                ImageList_Destroy(m_hDragImageList);
+                m_hDragImageList = nullptr;
+            }
+
+            m_treeView.ClearInsertMark();
+            m_treeView.ClearDropHighlight();
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+
+            if (m_hDragItem && m_dropPosition != storage::DropPosition::None) {
+                int64_t dragId = static_cast<int64_t>(m_treeView.GetItemData(m_hDragItem));
+                int64_t targetId = m_hDropTarget ? static_cast<int64_t>(m_treeView.GetItemData(m_hDropTarget)) : 0;
+
+                // 先保存编辑器，保存失败时不执行移动，避免移动后刷新目录覆盖未保存内容。
+                if (m_repo && SaveActiveNote() && m_repo->MoveNode(dragId, targetId, m_dropPosition)) {
+                    PopulateTreeViewFromDb(dragId);
+                    UpdateStatusBar(L"已调整笔记顺序与层级");
+                }
+            }
+
+            m_hDragItem = nullptr;
+            m_hDropTarget = nullptr;
+            m_dropPosition = storage::DropPosition::None;
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CANCELMODE:
+        CancelDragOperation();
+        return 0;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE && m_isDragging) {
+            CancelDragOperation();
+            return 0;
+        }
+        break;
+
     case WM_NOTIFY: {
         auto* pNmhdr = reinterpret_cast<NMHDR*>(lParam);
         if (pNmhdr && pNmhdr->idFrom == IDC_MAIN_TREEVIEW) {
             if (pNmhdr->code == TVN_SELCHANGEDW) {
                 OnTreeSelectionChanged(reinterpret_cast<NMTREEVIEWW*>(lParam));
                 return 0;
+            } else if (pNmhdr->code == TVN_BEGINDRAGW) {
+                auto* pNmtv = reinterpret_cast<NMTREEVIEWW*>(lParam);
+                if (pNmtv && pNmtv->itemNew.hItem) {
+                    m_hDragItem = pNmtv->itemNew.hItem;
+                    m_hDropTarget = nullptr;
+                    m_dropPosition = storage::DropPosition::None;
+                    m_isDragging = true;
+
+                    SetCapture(m_hWnd);
+
+                    m_hDragImageList = TreeView_CreateDragImage(m_treeView.GetHwnd(), m_hDragItem);
+                    if (m_hDragImageList) {
+                        POINT ptScreen;
+                        GetCursorPos(&ptScreen);
+                        POINT ptMain = ptScreen;
+                        ScreenToClient(m_hWnd, &ptMain);
+                        ImageList_BeginDrag(m_hDragImageList, 0, 8, 8);
+                        ImageList_DragEnter(m_hWnd, ptMain.x, ptMain.y);
+                    }
+                }
+                return 0;
             } else if (pNmhdr->code == TVN_KEYDOWN) {
                 auto* pTvKey = reinterpret_cast<NMTVKEYDOWN*>(lParam);
+                if (pTvKey->wVKey == VK_ESCAPE && m_isDragging) {
+                    // 拖拽期间焦点仍在 TreeView，Escape 通过 TVN_KEYDOWN 到达父窗口。
+                    CancelDragOperation();
+                    return 1;
+                }
                 if (pTvKey->wVKey == VK_DELETE) {
                     // 仅当焦点在左侧树控件且未在就地编辑文本时响应 Del 删除笔记
                     if (!TreeView_GetEditControl(m_treeView.GetHwnd())) {

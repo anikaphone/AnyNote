@@ -419,6 +419,161 @@ bool NoteRepository::UpdateNodeHierarchy(int64_t nodeId, int64_t newParentId, in
     return stmt.Step() == SQLITE_DONE;
 }
 
+bool NoteRepository::IsDescendantOf(int64_t checkId, int64_t ancestorId) {
+    if (checkId <= 0 || ancestorId <= 0) return false;
+    if (checkId == ancestorId) return true;
+
+    int64_t curId = checkId;
+    while (curId > 0) {
+        if (curId == ancestorId) return true;
+        Database::Statement stmt;
+        if (!stmt.Prepare(m_db, "SELECT parent_id FROM nodes WHERE id = ?;")) {
+            break;
+        }
+        stmt.BindInt64(1, curId);
+        if (stmt.Step() == SQLITE_ROW) {
+            curId = stmt.GetInt64(0);
+        } else {
+            break;
+        }
+    }
+    return false;
+}
+
+void NoteRepository::ReorderSiblings(int64_t parentId) {
+    Database::Statement stmt;
+    if (!stmt.Prepare(m_db, "SELECT id FROM nodes WHERE parent_id = ? ORDER BY sequence ASC, id ASC;")) {
+        return;
+    }
+    stmt.BindInt64(1, parentId);
+
+    std::vector<int64_t> ids;
+    while (stmt.Step() == SQLITE_ROW) {
+        ids.push_back(stmt.GetInt64(0));
+    }
+
+    int seq = 0;
+    for (int64_t id : ids) {
+        Database::Statement upd;
+        if (upd.Prepare(m_db, "UPDATE nodes SET sequence = ? WHERE id = ?;")) {
+            upd.BindInt(1, seq++);
+            upd.BindInt64(2, id);
+            upd.Step();
+        }
+    }
+}
+
+bool NoteRepository::MoveNode(int64_t dragNodeId, int64_t targetNodeId, DropPosition position) {
+    if (!m_db.IsOpen() || dragNodeId <= 0 || position == DropPosition::None) {
+        return false;
+    }
+
+    auto dragNodeOpt = GetNode(dragNodeId);
+    if (!dragNodeOpt.has_value()) return false;
+    auto dragNode = dragNodeOpt.value();
+
+    int64_t oldParentId = dragNode.parentId;
+    int64_t newParentId = 0;
+    int targetSeq = 0;
+
+    if (position == DropPosition::AtRootEnd) {
+        newParentId = 0;
+        Database::Statement seqStmt;
+        if (seqStmt.Prepare(m_db, "SELECT COALESCE(MAX(sequence), -1) + 1 FROM nodes WHERE parent_id = 0;")) {
+            if (seqStmt.Step() == SQLITE_ROW) {
+                targetSeq = seqStmt.GetInt(0);
+            }
+        }
+    } else {
+        if (targetNodeId <= 0 || dragNodeId == targetNodeId) {
+            return false;
+        }
+
+        auto targetNodeOpt = GetNode(targetNodeId);
+        if (!targetNodeOpt.has_value()) return false;
+        auto targetNode = targetNodeOpt.value();
+
+        if (position == DropPosition::AsChild) {
+            newParentId = targetNode.id;
+            Database::Statement seqStmt;
+            if (seqStmt.Prepare(m_db, "SELECT COALESCE(MAX(sequence), -1) + 1 FROM nodes WHERE parent_id = ?;")) {
+                seqStmt.BindInt64(1, newParentId);
+                if (seqStmt.Step() == SQLITE_ROW) {
+                    targetSeq = seqStmt.GetInt(0);
+                }
+            }
+        } else if (position == DropPosition::Before) {
+            newParentId = targetNode.parentId;
+            targetSeq = targetNode.sequence;
+        } else if (position == DropPosition::After) {
+            newParentId = targetNode.parentId;
+            targetSeq = targetNode.sequence + 1;
+        }
+    }
+
+    // 严禁将节点移动到自己或自己的后代之下（防止循环依赖导致树损坏）
+    if (IsDescendantOf(newParentId, dragNodeId)) {
+        return false;
+    }
+
+    if (!m_db.BeginTransaction()) {
+        return false;
+    }
+
+    int64_t now = GetCurrentUnixTimestamp();
+
+    // 1. 先将当前节点 sequence 设为 -1，避免参与后续的兄弟节点移位判定
+    Database::Statement tempStmt;
+    if (!tempStmt.Prepare(m_db, "UPDATE nodes SET sequence = -1 WHERE id = ?;")) {
+        m_db.Rollback();
+        return false;
+    }
+    tempStmt.BindInt64(1, dragNodeId);
+    if (tempStmt.Step() != SQLITE_DONE) {
+        m_db.Rollback();
+        return false;
+    }
+
+    // 2. 如果是插入到指定位置 (Before/After)，在新父节点下为待插入位置腾出空间
+    if (position == DropPosition::Before || position == DropPosition::After) {
+        Database::Statement shiftStmt;
+        if (shiftStmt.Prepare(m_db, "UPDATE nodes SET sequence = sequence + 1 WHERE parent_id = ? AND sequence >= ? AND id != ?;")) {
+            shiftStmt.BindInt64(1, newParentId);
+            shiftStmt.BindInt(2, targetSeq);
+            shiftStmt.BindInt64(3, dragNodeId);
+            shiftStmt.Step();
+        }
+    }
+
+    // 3. 更新被拖动节点的 parent_id, sequence, modified_time
+    Database::Statement updStmt;
+    if (!updStmt.Prepare(m_db, "UPDATE nodes SET parent_id = ?, sequence = ?, modified_time = ? WHERE id = ?;")) {
+        m_db.Rollback();
+        return false;
+    }
+    updStmt.BindInt64(1, newParentId);
+    updStmt.BindInt(2, targetSeq);
+    updStmt.BindInt64(3, now);
+    updStmt.BindInt64(4, dragNodeId);
+    if (updStmt.Step() != SQLITE_DONE) {
+        m_db.Rollback();
+        return false;
+    }
+
+    // 4. 分别规整旧父节点与新父节点下的序列号，保证连续性
+    ReorderSiblings(oldParentId);
+    if (newParentId != oldParentId) {
+        ReorderSiblings(newParentId);
+    }
+
+    if (!m_db.Commit()) {
+        m_db.Rollback();
+        return false;
+    }
+
+    return true;
+}
+
 bool NoteRepository::DeleteNote(int64_t nodeId) {
     if (!m_db.IsOpen()) return false;
 
