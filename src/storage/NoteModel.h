@@ -27,6 +27,15 @@ struct NoteContent {
     int64_t nodeId = 0;
     int formatType = 1; // 1: RTF (Rich Text Format)
     std::string contentRtf;
+    std::wstring plainText;
+};
+
+struct SearchResult {
+    int64_t nodeId = 0;
+    std::wstring title;
+    bool matchInTitle = false;
+    std::wstring snippet;
+    int matchOffsetInText = -1;
 };
 
 } // namespace anynote::storage

@@ -1,5 +1,6 @@
 #include "TreeView.h"
 #include <uxtheme.h>
+#include <functional>
 
 namespace anynote::ui {
 
@@ -218,6 +219,26 @@ bool TreeView::IsDescendant(HTREEITEM hParent, HTREEITEM hChild) const {
         hCur = TreeView_GetParent(m_hWnd, hCur);
     }
     return false;
+}
+
+void TreeView::ExpandAll(bool expand) {
+    if (!m_hWnd) return;
+    SendMessageW(m_hWnd, WM_SETREDRAW, FALSE, 0);
+
+    std::function<void(HTREEITEM)> recurse = [&](HTREEITEM hItem) {
+        while (hItem) {
+            TreeView_Expand(m_hWnd, hItem, expand ? TVE_EXPAND : TVE_COLLAPSE);
+            HTREEITEM hChild = TreeView_GetChild(m_hWnd, hItem);
+            if (hChild) {
+                recurse(hChild);
+            }
+            hItem = TreeView_GetNextSibling(m_hWnd, hItem);
+        }
+    };
+    recurse(TreeView_GetRoot(m_hWnd));
+
+    SendMessageW(m_hWnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hWnd, nullptr, TRUE);
 }
 
 void TreeView::PopulateSampleNodes() {

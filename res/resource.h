@@ -20,6 +20,8 @@
 #define ID_FILE_OPEN_NOTEBOOK   1006
 #define ID_FILE_SAVE            1007
 #define ID_FILE_EXIT            1008
+#define ID_TREE_EXPAND_ALL      1020
+#define ID_TREE_COLLAPSE_ALL    1021
 
 // Edit Commands
 #define ID_EDIT_UNDO            1101
@@ -28,6 +30,12 @@
 #define ID_EDIT_COPY            1104
 #define ID_EDIT_PASTE           1105
 #define ID_EDIT_SELECTALL       1106
+#define ID_EDIT_FIND            1110
+#define ID_EDIT_FIND_NEXT       1111
+#define ID_EDIT_FIND_PREV       1112
+#define ID_SEARCH_GLOBAL        1113
+#define ID_EDIT_REPLACE         1114
+#define ID_EDIT_MARK            1115
 
 // Format Commands
 #define ID_FORMAT_HEADING_0     1210
@@ -59,6 +67,9 @@
 #define IDC_MAIN_TREEVIEW       2003
 #define IDC_MAIN_RICHEDIT       2004
 #define IDC_MAIN_SPLITTER       2005
+#define IDC_MAIN_SEARCH_PANE    2006
+#define IDC_MAIN_SEARCH_BAR     2007
+#define IDC_MAIN_SPLITTER_H     2008
 #define IDC_TOOLBAR_HEADING_COMBO 2010
 
 // Code Block Dialog IDs

@@ -1,5 +1,8 @@
 #include "RichEditView.h"
 #include <commctrl.h>
+#include <commdlg.h>
+#include <windowsx.h>
+#include <cwctype>
 #include <vector>
 
 namespace anynote::ui {
@@ -53,6 +56,26 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
     if (uMsg == WM_NCDESTROY) {
         RemoveWindowSubclass(hWnd, RichEditSubclassProc, uIdSubclass);
     }
+    if (uMsg == WM_CONTEXTMENU) {
+        int xPos = GET_X_LPARAM(lParam);
+        int yPos = GET_Y_LPARAM(lParam);
+        if (xPos != -1 || yPos != -1) {
+            POINT ptClient = { xPos, yPos };
+            ScreenToClient(hWnd, &ptClient);
+            POINTL ptl = { ptClient.x, ptClient.y };
+            LRESULT charPos = SendMessageW(hWnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl));
+            if (charPos >= 0) {
+                CHARRANGE cr = {};
+                SendMessageW(hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+                if (charPos < cr.cpMin || charPos > cr.cpMax) {
+                    CHARRANGE newCr = { static_cast<LONG>(charPos), static_cast<LONG>(charPos) };
+                    SendMessageW(hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&newCr));
+                }
+            }
+        }
+        SendMessageW(GetParent(hWnd), WM_CONTEXTMENU, reinterpret_cast<WPARAM>(hWnd), lParam);
+        return 0;
+    }
     LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
     switch (uMsg) {
     case WM_CHAR:
@@ -98,7 +121,8 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
     }
 
     DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
-                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN;
+                    ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN |
+                    WS_CLIPSIBLINGS;
 
     m_hWnd = CreateWindowExW(
         0,
@@ -225,6 +249,11 @@ bool RichEditView::StreamInSelectionRTF(std::string_view rtfData) {
 
 std::string RichEditView::StreamOutRTF() const {
     if (!m_hWnd) return {};
+
+    // 确保临时高亮标记不会污染保存到数据库的 RTF 格式
+    if (!m_markedRanges.empty()) {
+        const_cast<RichEditView*>(this)->ClearMarks();
+    }
 
     std::string outData;
     EDITSTREAM es = {};
@@ -468,6 +497,269 @@ void RichEditView::SelectAll() {
         CHARRANGE cr = {0, -1};
         SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
     }
+}
+
+std::wstring RichEditView::GetPlainText() const {
+    if (!m_hWnd) return {};
+    GETTEXTLENGTHEX lengthInfo = {};
+    lengthInfo.flags = GTL_PRECISE | GTL_NUMCHARS;
+    lengthInfo.codepage = 1200;
+    LONG length = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX, reinterpret_cast<WPARAM>(&lengthInfo), 0));
+    if (length <= 0) return {};
+
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    GETTEXTEX textInfo = {};
+    textInfo.cb = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+    textInfo.flags = GT_DEFAULT;
+    textInfo.codepage = 1200;
+    LONG copied = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTEX, reinterpret_cast<WPARAM>(&textInfo), reinterpret_cast<LPARAM>(text.data())));
+    text.resize(static_cast<size_t>(copied));
+    return text;
+}
+
+bool RichEditView::SelectRange(LONG start, LONG end) {
+    if (!m_hWnd) return false;
+    CHARRANGE cr = {start, end};
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    SendMessageW(m_hWnd, EM_SCROLLCARET, 0, 0);
+    return true;
+}
+
+bool RichEditView::FindAndSelect(const std::wstring& text, bool forward, bool matchCase, bool wholeWord, bool wrapAround) {
+    if (!m_hWnd || text.empty()) return false;
+
+    CHARRANGE crCurr = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crCurr));
+
+    GETTEXTLENGTHEX lengthInfo = { GTL_PRECISE | GTL_NUMCHARS, 1200 };
+    LONG docLen = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX, reinterpret_cast<WPARAM>(&lengthInfo), 0));
+
+    DWORD flags = 0;
+    if (forward) flags |= FR_DOWN;
+    if (matchCase) flags |= FR_MATCHCASE;
+    if (wholeWord) flags |= FR_WHOLEWORD;
+
+    FINDTEXTEXW ft = {};
+    ft.lpstrText = text.c_str();
+
+    if (forward) {
+        ft.chrg.cpMin = crCurr.cpMax;
+        ft.chrg.cpMax = docLen;
+        LRESULT res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        if (res == -1 && wrapAround && crCurr.cpMax > 0) {
+            ft.chrg.cpMin = 0;
+            ft.chrg.cpMax = crCurr.cpMax;
+            res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        }
+        if (res != -1) {
+            SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&ft.chrgText));
+            SendMessageW(m_hWnd, EM_SCROLLCARET, 0, 0);
+            return true;
+        }
+    } else {
+        ft.chrg.cpMin = crCurr.cpMin;
+        ft.chrg.cpMax = 0;
+        LRESULT res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        if (res == -1 && wrapAround && crCurr.cpMin < docLen) {
+            ft.chrg.cpMin = docLen;
+            ft.chrg.cpMax = crCurr.cpMin;
+            res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        }
+        if (res != -1) {
+            SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&ft.chrgText));
+            SendMessageW(m_hWnd, EM_SCROLLCARET, 0, 0);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int RichEditView::CountMatches(const std::wstring& text, bool matchCase, bool wholeWord) const {
+    if (!m_hWnd || text.empty()) return 0;
+
+    GETTEXTLENGTHEX lengthInfo = { GTL_PRECISE | GTL_NUMCHARS, 1200 };
+    LONG docLen = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX, reinterpret_cast<WPARAM>(&lengthInfo), 0));
+    if (docLen <= 0) return 0;
+
+    DWORD flags = FR_DOWN;
+    if (matchCase) flags |= FR_MATCHCASE;
+    if (wholeWord) flags |= FR_WHOLEWORD;
+
+    int count = 0;
+    LONG curPos = 0;
+    FINDTEXTEXW ft = {};
+    ft.lpstrText = text.c_str();
+
+    while (curPos < docLen) {
+        ft.chrg.cpMin = curPos;
+        ft.chrg.cpMax = docLen;
+        LRESULT res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        if (res == -1) break;
+        count++;
+        curPos = ft.chrgText.cpMax;
+        if (ft.chrgText.cpMin == ft.chrgText.cpMax) curPos++;
+    }
+
+    return count;
+}
+
+bool RichEditView::ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward, bool matchCase, bool wholeWord, bool wrapAround) {
+    if (!m_hWnd || findText.empty()) return false;
+
+    // 检查当前选区是否精确匹配查找内容
+    std::wstring sel = GetSelectedText();
+    bool isMatch = false;
+    if (sel.size() == findText.size()) {
+        if (matchCase) {
+            isMatch = (sel == findText);
+        } else {
+            isMatch = (_wcsicmp(sel.c_str(), findText.c_str()) == 0);
+        }
+    }
+
+    if (isMatch) {
+        bool validWord = true;
+        if (wholeWord) {
+            CHARRANGE selected = {};
+            SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selected));
+            auto isWordChar = [](wchar_t ch) {
+                return std::iswalnum(ch) || ch == L'_';
+            };
+            std::wstring document = GetText();
+            validWord = (selected.cpMin <= 0 || !isWordChar(document[static_cast<size_t>(selected.cpMin - 1)])) &&
+                        (selected.cpMax >= static_cast<LONG>(document.size()) || !isWordChar(document[static_cast<size_t>(selected.cpMax)]));
+        }
+        if (validWord) {
+            SendMessageW(m_hWnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(replaceText.c_str()));
+        }
+    }
+
+    return FindAndSelect(findText, forward, matchCase, wholeWord, wrapAround);
+}
+
+int RichEditView::ReplaceAll(const std::wstring& findText, const std::wstring& replaceText, bool matchCase, bool wholeWord) {
+    if (!m_hWnd || findText.empty()) return 0;
+
+    ClearMarks();
+
+    CHARRANGE crOrig = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+
+    SendMessageW(m_hWnd, WM_SETREDRAW, FALSE, 0);
+
+    DWORD flags = FR_DOWN;
+    if (matchCase) flags |= FR_MATCHCASE;
+    if (wholeWord) flags |= FR_WHOLEWORD;
+
+    int count = 0;
+    LONG curPos = 0;
+    FINDTEXTEXW ft = {};
+    ft.lpstrText = findText.c_str();
+
+    while (true) {
+        GETTEXTLENGTHEX lengthInfo = { GTL_PRECISE | GTL_NUMCHARS, 1200 };
+        LONG docLen = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX, reinterpret_cast<WPARAM>(&lengthInfo), 0));
+        if (curPos >= docLen) break;
+
+        ft.chrg.cpMin = curPos;
+        ft.chrg.cpMax = docLen;
+        LRESULT res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        if (res == -1) break;
+
+        SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&ft.chrgText));
+        SendMessageW(m_hWnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(replaceText.c_str()));
+        count++;
+
+        CHARRANGE crAfter = {};
+        SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crAfter));
+        curPos = crAfter.cpMax;
+    }
+
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+    SendMessageW(m_hWnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hWnd, nullptr, TRUE);
+
+    return count;
+}
+
+int RichEditView::MarkAll(const std::wstring& text, bool matchCase, bool wholeWord) {
+    if (!m_hWnd || text.empty()) return 0;
+
+    ClearMarks();
+
+    GETTEXTLENGTHEX lengthInfo = { GTL_PRECISE | GTL_NUMCHARS, 1200 };
+    LONG docLen = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX, reinterpret_cast<WPARAM>(&lengthInfo), 0));
+    if (docLen <= 0) return 0;
+
+    CHARRANGE crOrig = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+
+    SendMessageW(m_hWnd, WM_SETREDRAW, FALSE, 0);
+
+    DWORD flags = FR_DOWN;
+    if (matchCase) flags |= FR_MATCHCASE;
+    if (wholeWord) flags |= FR_WHOLEWORD;
+
+    LONG curPos = 0;
+    FINDTEXTEXW ft = {};
+    ft.lpstrText = text.c_str();
+
+    CHARFORMAT2W cf = { sizeof(CHARFORMAT2W) };
+    cf.dwMask = CFM_BACKCOLOR;
+    cf.crBackColor = RGB(255, 255, 128); // 经典 Notepad++ 荧光黄
+    cf.dwEffects = 0;
+
+    while (curPos < docLen) {
+        ft.chrg.cpMin = curPos;
+        ft.chrg.cpMax = docLen;
+        LRESULT res = SendMessageW(m_hWnd, EM_FINDTEXTEXW, flags, reinterpret_cast<LPARAM>(&ft));
+        if (res == -1) break;
+
+        m_markedRanges.push_back(ft.chrgText);
+
+        SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&ft.chrgText));
+        CHARFORMAT2W original = { sizeof(CHARFORMAT2W) };
+        SendMessageW(m_hWnd, EM_GETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&original));
+        m_markedFormats.push_back(original);
+        SendMessageW(m_hWnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&cf));
+
+        curPos = ft.chrgText.cpMax;
+        if (ft.chrgText.cpMin == ft.chrgText.cpMax) curPos++;
+    }
+
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+    SendMessageW(m_hWnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hWnd, nullptr, TRUE);
+
+    return static_cast<int>(m_markedRanges.size());
+}
+
+void RichEditView::ClearMarks() {
+    if (!m_hWnd || m_markedRanges.empty()) return;
+
+    CHARRANGE crOrig = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+
+    SendMessageW(m_hWnd, WM_SETREDRAW, FALSE, 0);
+
+    for (size_t i = 0; i < m_markedRanges.size(); ++i) {
+        const auto& cr = m_markedRanges[i];
+        SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+        if (i < m_markedFormats.size()) {
+            auto format = m_markedFormats[i];
+            format.dwMask = CFM_BACKCOLOR;
+            format.dwEffects &= CFE_AUTOBACKCOLOR;
+            SendMessageW(m_hWnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&format));
+        }
+    }
+
+    m_markedRanges.clear();
+    m_markedFormats.clear();
+
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crOrig));
+    SendMessageW(m_hWnd, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(m_hWnd, nullptr, TRUE);
 }
 
 } // namespace anynote::ui

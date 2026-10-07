@@ -31,6 +31,10 @@ set(SOURCES
     src/ui/RichEditView.h
     src/ui/Toolbar.cpp
     src/ui/Toolbar.h
+    src/ui/FindReplaceDialog.cpp
+    src/ui/FindReplaceDialog.h
+    src/ui/SearchPane.cpp
+    src/ui/SearchPane.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/storage/Database.cpp

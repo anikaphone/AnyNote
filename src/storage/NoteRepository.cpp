@@ -2,6 +2,9 @@
 #include "common/StringUtils.h"
 #include <sqlite3.h>
 #include <chrono>
+#include <algorithm>
+#include <cwctype>
+#include <windows.h>
 
 namespace anynote::storage {
 
@@ -181,6 +184,158 @@ std::string BuildDefaultTodoRtf() {
     return rtf;
 }
 
+std::wstring ExtractPlainTextFromRtf(std::string_view rtf) {
+    std::wstring out;
+    out.reserve(rtf.size() / 2);
+
+    int groupDepth = 0;
+    int skipGroupDepth = -1;
+
+    size_t i = 0;
+    size_t len = rtf.size();
+    UINT codePage = 1252;
+    size_t headerEnd = std::min(len, size_t(512));
+    for (size_t p = 0; p + 8 < headerEnd; ++p) {
+        if (rtf.substr(p, 7) == "\\ansicpg") {
+            size_t q = p + 7;
+            UINT parsed = 0;
+            while (q < headerEnd && isdigit(static_cast<unsigned char>(rtf[q]))) {
+                parsed = parsed * 10 + static_cast<UINT>(rtf[q] - '0');
+                ++q;
+            }
+            if (parsed != 0) codePage = parsed;
+            break;
+        }
+    }
+
+    auto decodeBytes = [codePage](const std::string& bytes, std::wstring& target) {
+        if (bytes.empty()) return;
+        int needed = MultiByteToWideChar(codePage, 0, bytes.data(), static_cast<int>(bytes.size()), nullptr, 0);
+        if (needed <= 0) return;
+        std::wstring decoded(static_cast<size_t>(needed), L'\0');
+        MultiByteToWideChar(codePage, 0, bytes.data(), static_cast<int>(bytes.size()), decoded.data(), needed);
+        target += decoded;
+    };
+
+    while (i < len) {
+        char c = rtf[i];
+
+        if (c == '{') {
+            groupDepth++;
+            i++;
+            if (skipGroupDepth < 0 && i < len && rtf[i] == '\\') {
+                size_t kwStart = i + 1;
+                size_t kwEnd = kwStart;
+                while (kwEnd < len && (isalpha(static_cast<unsigned char>(rtf[kwEnd])) || rtf[kwEnd] == '*')) {
+                    kwEnd++;
+                }
+                std::string_view kw = rtf.substr(kwStart, kwEnd - kwStart);
+                if (kw == "*" || kw == "fonttbl" || kw == "colortbl" || kw == "stylesheet" || 
+                    kw == "info" || kw == "generator" || kw == "pict" || kw == "object") {
+                    skipGroupDepth = groupDepth;
+                }
+            }
+            continue;
+        }
+
+        if (c == '}') {
+            if (skipGroupDepth == groupDepth) {
+                skipGroupDepth = -1;
+            }
+            if (groupDepth > 0) groupDepth--;
+            i++;
+            continue;
+        }
+
+        if (skipGroupDepth > 0) {
+            i++;
+            continue;
+        }
+
+        if (c == '\\') {
+            i++;
+            if (i >= len) break;
+            char nextChar = rtf[i];
+
+            if (nextChar == '{' || nextChar == '}' || nextChar == '\\') {
+                out.push_back(static_cast<wchar_t>(nextChar));
+                i++;
+            } else if (nextChar == '~') {
+                out.push_back(L' ');
+                i++;
+            } else if (nextChar == '\'') {
+                std::string bytes;
+                while (i < len && rtf[i] == '\'' && i + 2 < len) {
+                    i++;
+                    auto hexVal = [](char h) -> int {
+                        if (h >= '0' && h <= '9') return h - '0';
+                        if (h >= 'a' && h <= 'f') return h - 'a' + 10;
+                        if (h >= 'A' && h <= 'F') return h - 'A' + 10;
+                        return 0;
+                    };
+                    int byteVal = (hexVal(rtf[i]) << 4) | hexVal(rtf[i + 1]);
+                    bytes.push_back(static_cast<char>(byteVal));
+                    i += 2;
+                    if (i + 2 >= len || rtf[i] != '\'') break;
+                }
+                decodeBytes(bytes, out);
+            } else if (isalpha(static_cast<unsigned char>(nextChar))) {
+                size_t wordStart = i;
+                while (i < len && isalpha(static_cast<unsigned char>(rtf[i]))) {
+                    i++;
+                }
+                std::string_view word = rtf.substr(wordStart, i - wordStart);
+
+                bool hasNum = false;
+                long long numVal = 0;
+                int sign = 1;
+                if (i < len && rtf[i] == '-') {
+                    sign = -1;
+                    i++;
+                }
+                size_t numStart = i;
+                while (i < len && isdigit(static_cast<unsigned char>(rtf[i]))) {
+                    hasNum = true;
+                    i++;
+                }
+                if (hasNum) {
+                    std::string numStr(rtf.substr(numStart, i - numStart));
+                    numVal = sign * std::stoll(numStr);
+                }
+
+                if (i < len && rtf[i] == ' ') {
+                    i++;
+                }
+
+                if (word == "par" || word == "line") {
+                    out.push_back(L'\n');
+                } else if (word == "tab") {
+                    out.push_back(L'\t');
+                } else if (word == "u" && hasNum) {
+                    uint16_t ucode = static_cast<uint16_t>(static_cast<int16_t>(numVal));
+                    out.push_back(static_cast<wchar_t>(ucode));
+                    if (i < len && rtf[i] != '\\' && rtf[i] != '{' && rtf[i] != '}') {
+                        i++;
+                    }
+                }
+            } else {
+                i++;
+            }
+            continue;
+        }
+
+        if (c == '\r' || c == '\n') {
+            i++;
+            continue;
+        }
+
+        out.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
+        i++;
+    }
+
+    return out;
+}
+
 } // namespace
 
 NoteRepository::NoteRepository(Database& db)
@@ -212,11 +367,57 @@ bool NoteRepository::InitializeSchema() {
             node_id       INTEGER PRIMARY KEY,
             format_type   INTEGER NOT NULL DEFAULT 1,
             content_rtf   BLOB,
+            plain_text    TEXT,
             FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
         );
     )";
 
-    return m_db.Execute(schemaSql);
+    if (!m_db.Execute(schemaSql)) {
+        return false;
+    }
+
+    // 检查并自动升级既有数据库，保证具备 plain_text 列
+    bool hasPlainTextCol = false;
+    Database::Statement infoStmt;
+    if (infoStmt.Prepare(m_db, "PRAGMA table_info(node_contents);")) {
+        while (infoStmt.Step() == SQLITE_ROW) {
+            if (infoStmt.GetText(1) == "plain_text") {
+                hasPlainTextCol = true;
+                break;
+            }
+        }
+    }
+    if (!hasPlainTextCol) {
+        m_db.Execute("ALTER TABLE node_contents ADD COLUMN plain_text TEXT;");
+    }
+
+    // 自动为已有旧笔记数据补充纯文本索引 (如果 plain_text 为空但 content_rtf 存在)
+    Database::Statement backfillStmt;
+    if (backfillStmt.Prepare(m_db, "SELECT node_id, content_rtf FROM node_contents WHERE content_rtf IS NOT NULL AND (plain_text IS NULL OR plain_text = '');")) {
+        std::vector<std::pair<int64_t, std::string>> toMigrate;
+        while (backfillStmt.Step() == SQLITE_ROW) {
+            int64_t nid = backfillStmt.GetInt64(0);
+            std::string rtf = backfillStmt.GetBlob(1);
+            if (!rtf.empty()) {
+                toMigrate.emplace_back(nid, std::move(rtf));
+            }
+        }
+        if (!toMigrate.empty() && m_db.BeginTransaction()) {
+            Database::Statement updateStmt;
+            if (updateStmt.Prepare(m_db, "UPDATE node_contents SET plain_text = ? WHERE node_id = ?;")) {
+                for (const auto& [nid, rtf] : toMigrate) {
+                    std::wstring plain = ExtractPlainTextFromRtf(rtf);
+                    updateStmt.Reset();
+                    updateStmt.BindText(1, plain);
+                    updateStmt.BindInt64(2, nid);
+                    updateStmt.Step();
+                }
+            }
+            m_db.Commit();
+        }
+    }
+
+    return true;
 }
 
 int64_t NoteRepository::GetNodeCount() {
@@ -283,7 +484,19 @@ std::string NoteRepository::GetNoteContent(int64_t nodeId) {
     return {};
 }
 
-int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, int sequence, int nodeType, const std::string& initialRtf) {
+std::wstring NoteRepository::GetNotePlainText(int64_t nodeId) {
+    Database::Statement stmt;
+    if (!stmt.Prepare(m_db, "SELECT plain_text FROM node_contents WHERE node_id = ?;")) {
+        return {};
+    }
+    stmt.BindInt64(1, nodeId);
+    if (stmt.Step() == SQLITE_ROW) {
+        return stmt.GetWideText(0);
+    }
+    return {};
+}
+
+int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, int sequence, int nodeType, const std::string& initialRtf, const std::wstring& initialPlainText) {
     if (!m_db.IsOpen()) return 0;
 
     if (sequence < 0) {
@@ -325,7 +538,7 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
     int64_t newId = sqlite3_last_insert_rowid(m_db.GetRawHandle());
 
     Database::Statement cntStmt;
-    if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf) VALUES (?, 1, ?);")) {
+    if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text) VALUES (?, 1, ?, ?);")) {
         m_db.Rollback();
         return 0;
     }
@@ -335,6 +548,11 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
         cntStmt.BindBlob(2, initialRtf.data(), initialRtf.size());
     } else {
         cntStmt.BindNull(2);
+    }
+    if (!initialPlainText.empty()) {
+        cntStmt.BindText(3, initialPlainText);
+    } else {
+        cntStmt.BindNull(3);
     }
 
     if (cntStmt.Step() != SQLITE_DONE) {
@@ -363,14 +581,19 @@ bool NoteRepository::UpdateNoteTitle(int64_t nodeId, const std::wstring& title) 
     return stmt.Step() == SQLITE_DONE;
 }
 
-bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfContent) {
+bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfContent, const std::wstring& plainText) {
     if (!m_db.IsOpen()) return false;
 
     int64_t now = GetCurrentUnixTimestamp();
     if (!m_db.BeginTransaction()) return false;
 
     Database::Statement cntStmt;
-    if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf) VALUES (?, 1, ?) ON CONFLICT(node_id) DO UPDATE SET content_rtf = excluded.content_rtf;")) {
+    if (!cntStmt.Prepare(m_db,
+        "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text) "
+        "VALUES (?, 1, ?, ?) "
+        "ON CONFLICT(node_id) DO UPDATE SET "
+        "content_rtf = excluded.content_rtf, "
+        "plain_text = excluded.plain_text;")) {
         m_db.Rollback();
         return false;
     }
@@ -380,6 +603,11 @@ bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfCon
         cntStmt.BindBlob(2, rtfContent.data(), rtfContent.size());
     } else {
         cntStmt.BindNull(2);
+    }
+    if (!plainText.empty()) {
+        cntStmt.BindText(3, plainText);
+    } else {
+        cntStmt.BindNull(3);
     }
 
     if (cntStmt.Step() != SQLITE_DONE) {
@@ -402,6 +630,89 @@ bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfCon
         return false;
     }
     return true;
+}
+
+std::vector<SearchResult> NoteRepository::SearchNotes(const std::wstring& keyword, bool matchCase, bool searchContent) {
+    std::vector<SearchResult> results;
+    if (!m_db.IsOpen() || keyword.empty()) return results;
+
+    std::wstring needle = keyword;
+    if (!matchCase) {
+        std::transform(needle.begin(), needle.end(), needle.begin(), ::towlower);
+    }
+
+    // 1. 标题匹配
+    {
+        Database::Statement stmt;
+        if (stmt.Prepare(m_db, "SELECT id, title FROM nodes ORDER BY sequence ASC, id ASC;")) {
+            while (stmt.Step() == SQLITE_ROW) {
+                int64_t id = stmt.GetInt64(0);
+                std::wstring title = stmt.GetWideText(1);
+                std::wstring titleCmp = title;
+                if (!matchCase) {
+                    std::transform(titleCmp.begin(), titleCmp.end(), titleCmp.begin(), ::towlower);
+                }
+                auto pos = titleCmp.find(needle);
+                if (pos != std::wstring::npos) {
+                    SearchResult sr;
+                    sr.nodeId = id;
+                    sr.title = title;
+                    sr.matchInTitle = true;
+                    sr.snippet = L"【标题匹配】 " + title;
+                    sr.matchOffsetInText = -1;
+                    results.push_back(std::move(sr));
+                }
+            }
+        }
+    }
+
+    // 2. 正文纯文本匹配
+    if (searchContent) {
+        Database::Statement stmt;
+        if (stmt.Prepare(m_db, "SELECT n.id, n.title, c.plain_text, c.content_rtf FROM nodes n JOIN node_contents c ON n.id = c.node_id WHERE (c.plain_text IS NOT NULL AND c.plain_text != '') OR (c.content_rtf IS NOT NULL);")) {
+            while (stmt.Step() == SQLITE_ROW) {
+                int64_t id = stmt.GetInt64(0);
+                std::wstring title = stmt.GetWideText(1);
+                std::wstring content = stmt.GetWideText(2);
+                if (content.empty()) {
+                    std::string rtf = stmt.GetBlob(3);
+                    if (!rtf.empty()) {
+                        content = ExtractPlainTextFromRtf(rtf);
+                    }
+                }
+                if (content.empty()) continue;
+
+                std::wstring contentCmp = content;
+                if (!matchCase) {
+                    std::transform(contentCmp.begin(), contentCmp.end(), contentCmp.begin(), ::towlower);
+                }
+
+                size_t pos = contentCmp.find(needle);
+                if (pos != std::wstring::npos) {
+                    SearchResult sr;
+                    sr.nodeId = id;
+                    sr.title = title;
+                    sr.matchInTitle = false;
+                    sr.matchOffsetInText = static_cast<int>(pos);
+
+                    // 截取上下文摘要 (前后各约 25 个字符)
+                    size_t start = (pos > 25) ? (pos - 25) : 0;
+                    size_t end = std::min(content.size(), pos + needle.size() + 35);
+                    std::wstring snippet = content.substr(start, end - start);
+                    for (auto& ch : snippet) {
+                        if (ch == L'\r' || ch == L'\n' || ch == L'\t') ch = L' ';
+                    }
+                    if (start > 0) snippet = L"..." + snippet;
+                    if (end < content.size()) snippet = snippet + L"...";
+
+                    sr.snippet = std::move(snippet);
+                    results.push_back(std::move(sr));
+                }
+            }
+        }
+    }
+
+    return results;
 }
 
 bool NoteRepository::UpdateNodeHierarchy(int64_t nodeId, int64_t newParentId, int newSequence) {
@@ -617,22 +928,29 @@ bool NoteRepository::DeleteNote(int64_t nodeId) {
 bool NoteRepository::CreateDefaultWelcomeNotes() {
     if (!m_db.IsOpen()) return false;
 
-    int64_t root1 = CreateNote(0, L"📌 欢迎使用 AnyNote", 0, 0, BuildDefaultWelcomeRtf());
+    int64_t root1 = CreateNote(0, L"📌 欢迎使用 AnyNote", 0, 0, BuildDefaultWelcomeRtf(),
+        L"欢迎使用 AnyNote - 基于 C++20 与原生 Win32 的分层树状笔记！\n特性高光：原生富文本内核、剪贴板图片直接粘贴、原生代码框、单文件安全存储。");
     if (root1 > 0) {
-        CreateNote(root1, L"🚀 快速上手指南", 0, 0, BuildDefaultQuickStartRtf());
-        CreateNote(root1, L"💡 特性与快捷键说明", 1, 0, BuildDefaultFeaturesRtf());
+        CreateNote(root1, L"🚀 快速上手指南", 0, 0, BuildDefaultQuickStartRtf(),
+            L"快速上手指南：1. 树形目录右键添加笔记；2. 工具栏加粗斜体；3. 1~4级标题；4. Ctrl+K 插入代码块；5. 截图直接 Ctrl+V 粘贴图片；6. SQLite 自动保存。");
+        CreateNote(root1, L"💡 特性与快捷键说明", 1, 0, BuildDefaultFeaturesRtf(),
+            L"特性与常用快捷键：Ctrl+N 新建笔记，Ctrl+Shift+N 新建子笔记，F2 重命名，Del 删除，Ctrl+S 保存，Ctrl+F 查找，Ctrl+Shift+F 全库搜索。");
     }
 
-    int64_t root2 = CreateNote(0, L"💻 开发与技术积累", 1, 0, "");
+    int64_t root2 = CreateNote(0, L"💻 开发与技术积累", 1, 0, "", L"现代软件工程架构设计与技术积累。");
     if (root2 > 0) {
-        CreateNote(root2, L"📘 现代 C++ 与 Win32 架构", 0, 0, BuildDefaultCppRtf());
-        CreateNote(root2, L"🔒 SQLite3MC 数据库与安全", 1, 0, BuildDefaultSqliteRtf());
-        CreateNote(root2, L"🎨 RichEdit 富文本与代码块", 2, 0, BuildDefaultWelcomeRtf());
+        CreateNote(root2, L"📘 现代 C++ 与 Win32 架构", 0, 0, BuildDefaultCppRtf(),
+            L"现代 C++ 与 Win32 架构设计：GWLP_USERDATA 绑定，Per-Monitor V2 DPI 高分屏，全静态链接零第三方 DLL 依赖。");
+        CreateNote(root2, L"🔒 SQLite3MC 数据库与安全", 1, 0, BuildDefaultSqliteRtf(),
+            L"SQLite3MC 数据库与安全机制：AES-256 全库透明加解密，nodes 树形表，node_contents 内容表。");
+        CreateNote(root2, L"🎨 RichEdit 富文本与代码块", 2, 0, BuildDefaultWelcomeRtf(),
+            L"RichEdit 富文本与代码块：Windows 原生 MSFTEDIT.DLL，多语言语法高亮卡片嵌入。");
     }
 
-    int64_t root3 = CreateNote(0, L"📝 随手记 / 待办", 2, 0, "");
+    int64_t root3 = CreateNote(0, L"📝 随手记 / 待办", 2, 0, "", L"日常笔记与待办清单。");
     if (root3 > 0) {
-        CreateNote(root3, L"计划清单", 0, 0, BuildDefaultTodoRtf());
+        CreateNote(root3, L"计划清单", 0, 0, BuildDefaultTodoRtf(),
+            L"今日计划与待办事项：[√] Win32 骨架；[√] RichEdit 富文本；[√] 标题层级；[√] SQLite3MC 加密存储；[√] 目录树拖拽重排；[√] 全文与编辑器双模搜索。");
     }
 
     return true;

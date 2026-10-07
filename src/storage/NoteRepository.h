@@ -26,17 +26,21 @@ public:
     // 获取单个节点信息
     std::optional<NoteNode> GetNode(int64_t id);
 
-    // 获取笔记 RTF 正文
+    // 获取笔记 RTF 正文与纯文本
     std::string GetNoteContent(int64_t nodeId);
+    std::wstring GetNotePlainText(int64_t nodeId);
 
     // 创建笔记节点 (若 sequence 为 -1 则自动排在同级末尾)
-    int64_t CreateNote(int64_t parentId, const std::wstring& title, int sequence = -1, int nodeType = 0, const std::string& initialRtf = "");
+    int64_t CreateNote(int64_t parentId, const std::wstring& title, int sequence = -1, int nodeType = 0, const std::string& initialRtf = "", const std::wstring& initialPlainText = L"");
 
     // 更新笔记标题
     bool UpdateNoteTitle(int64_t nodeId, const std::wstring& title);
 
-    // 更新笔记正文 RTF
-    bool UpdateNoteContent(int64_t nodeId, const std::string& rtfContent);
+    // 更新笔记正文 (RTF 格式与纯文本)
+    bool UpdateNoteContent(int64_t nodeId, const std::string& rtfContent, const std::wstring& plainText = L"");
+
+    // 全库搜索笔记 (支持标题与正文搜索、大小写匹配选项)
+    std::vector<SearchResult> SearchNotes(const std::wstring& keyword, bool matchCase = false, bool searchContent = true);
 
     // 更新节点层级与顺序
     bool UpdateNodeHierarchy(int64_t nodeId, int64_t newParentId, int newSequence);

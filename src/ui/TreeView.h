@@ -39,6 +39,7 @@ public:
     HTREEITEM GetParentItem(HTREEITEM hItem) const;
     bool IsDescendant(HTREEITEM hParent, HTREEITEM hChild) const;
 
+    void ExpandAll(bool expand = true);
     void PopulateSampleNodes();
 
 private:

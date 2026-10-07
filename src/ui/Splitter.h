@@ -17,7 +17,7 @@ public:
         }
     }
 
-    bool Initialize(HWND hParent, int x, int y, int height);
+    bool Initialize(HWND hParent, int x, int y, int size, bool isHorizontal = false);
 
     static const wchar_t* GetClassName() { return L"AnyNoteSplitter"; }
     static void RegisterClassIfNeeded(HINSTANCE hInstance);
@@ -27,6 +27,7 @@ protected:
 
 private:
     bool m_isDragging = false;
+    bool m_isHorizontal = false;
     HCURSOR m_hCursor = nullptr;
     HBRUSH m_hBgBrush = nullptr;
 };

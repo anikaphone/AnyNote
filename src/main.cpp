@@ -40,6 +40,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPWSTR /*l
             // 7. Win32 主消息循环
             MSG msg = {};
             while (GetMessageW(&msg, nullptr, 0, 0)) {
+                HWND hFindDlg = mainWindow.GetFindReplaceDialogHwnd();
+                if (hFindDlg && IsWindow(hFindDlg) && IsWindowVisible(hFindDlg) && IsDialogMessageW(hFindDlg, &msg)) {
+                    continue;
+                }
+
                 if (!hAccel || !TranslateAcceleratorW(mainWindow.GetHwnd(), hAccel, &msg)) {
                     TranslateMessage(&msg);
                     DispatchMessageW(&msg);

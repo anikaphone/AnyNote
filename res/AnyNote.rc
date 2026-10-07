@@ -1,6 +1,9 @@
 #include <windows.h>
 #include "resource.h"
 
+// 应用程序图标 (第一个定义的图标自动作为 exe 外壳图标)
+IDI_APP_ICON ICON "AnyNote.ico"
+
 // 主菜单
 IDR_MAIN_MENU MENU
 BEGIN
@@ -28,6 +31,17 @@ BEGIN
         MENUITEM "粘贴(&P)\tCtrl+V",             ID_EDIT_PASTE
         MENUITEM SEPARATOR
         MENUITEM "全选(&A)\tCtrl+A",             ID_EDIT_SELECTALL
+    END
+
+    POPUP "搜索(&S)"
+    BEGIN
+        MENUITEM "查找(&F)...\tCtrl+F",           ID_EDIT_FIND
+        MENUITEM "替换(&R)...\tCtrl+H",           ID_EDIT_REPLACE
+        MENUITEM "标记(&M)...\tCtrl+M",           ID_EDIT_MARK
+        MENUITEM "查找下一个\tF3",                 ID_EDIT_FIND_NEXT
+        MENUITEM "查找上一个\tShift+F3",            ID_EDIT_FIND_PREV
+        MENUITEM SEPARATOR
+        MENUITEM "全库笔记搜索(&G)...\tCtrl+Shift+F", ID_SEARCH_GLOBAL
     END
 
     POPUP "格式(&O)"
@@ -84,6 +98,12 @@ BEGIN
     "I", ID_FORMAT_ITALIC,      VIRTKEY, CONTROL
     "U", ID_FORMAT_UNDERLINE,   VIRTKEY, CONTROL
     "K", ID_FORMAT_CODE_BLOCK,  VIRTKEY, CONTROL
+    "F", ID_EDIT_FIND,          VIRTKEY, CONTROL
+    "H", ID_EDIT_REPLACE,       VIRTKEY, CONTROL
+    "M", ID_EDIT_MARK,          VIRTKEY, CONTROL
+    VK_F3, ID_EDIT_FIND_NEXT,   VIRTKEY
+    VK_F3, ID_EDIT_FIND_PREV,   VIRTKEY, SHIFT
+    "F", ID_SEARCH_GLOBAL,      VIRTKEY, CONTROL, SHIFT
 END
 
 // 插入代码块对话框

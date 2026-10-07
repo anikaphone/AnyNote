@@ -150,6 +150,67 @@ int main() {
         // 9.4 测试循环依赖防护: 不能将 Root B 移动到自己的子节点 Child A1 之下
         assert(!repo.MoveNode(rootB, childA1, DropPosition::AsChild));
 
+        // 10. 测试 SearchNotes (全库搜索: 标题与正文模糊搜索)
+        std::cout << "[TEST] 10. Testing SearchNotes..." << std::endl;
+        int64_t searchNote1 = repo.CreateNote(0, L"C++ 性能优化专题", 2, 0, "", L"关于 MSVC 现代 C++20 与原生 Win32 的极致响应速度。");
+        int64_t searchNote2 = repo.CreateNote(0, L"读书笔记", 3, 0, "", L"这是一篇普通的读书笔记，记录了哲学与生活。");
+
+        // 搜索标题
+        auto resTitle = repo.SearchNotes(L"性能优化", false, true);
+        assert(!resTitle.empty());
+        assert(resTitle[0].nodeId == searchNote1);
+        assert(resTitle[0].matchInTitle);
+
+        // 搜索正文
+        auto resContent = repo.SearchNotes(L"Win32", false, true);
+        assert(!resContent.empty());
+        bool foundWin32 = false;
+        for (const auto& r : resContent) {
+            if (r.nodeId == searchNote1 && !r.matchInTitle) {
+                foundWin32 = true;
+                assert(!r.snippet.empty());
+            }
+        }
+        assert(foundWin32);
+
+        // 大小写敏感搜索测试
+        auto resCaseSensitive1 = repo.SearchNotes(L"win32", true, true);
+        assert(resCaseSensitive1.empty()); // 正文是大写 Win32，大小写敏感应搜不到
+        auto resCaseSensitive2 = repo.SearchNotes(L"Win32", true, true);
+        assert(!resCaseSensitive2.empty()); // 大小写匹配
+
+        // 仅搜索标题测试 (searchContent = false)
+        auto resTitleOnly = repo.SearchNotes(L"Win32", false, false);
+        assert(resTitleOnly.empty()); // Win32 仅在正文中，不应命中
+
+        // 更新正文纯文本并搜索验证
+        repo.UpdateNoteContent(searchNote2, "fake-rtf", L"更新后的读书笔记正文，包含了架构模式与重构实战。");
+        auto resUpdated = repo.SearchNotes(L"重构实战", false, true);
+        assert(!resUpdated.empty());
+        assert(resUpdated[0].nodeId == searchNote2);
+        assert(!resUpdated[0].matchInTitle);
+
+        // 11. 测试旧笔记 RTF 纯文本自动回填 (RTF Backfill)
+        std::cout << "[TEST] 11. Testing RTF backfill and Chinese full-text search..." << std::endl;
+        // 创建一个只有 RTF 但没有 plain_text 的笔记，模拟旧版数据
+        int64_t oldNoteId = repo.CreateNote(0, L"旧版架构笔记", 4, 0,
+            "{\\rtf1\\ansi\\deff0\\nouicompat{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}}\\viewkind4\\uc1\\pard "
+            "\\u21407?\\u29983? Win32 \\u19982? SQLite3MC \\u20840?\\u24211?\\u21152?\\u23494?\\par}");
+        // 初始 plainText 为空
+        assert(repo.GetNotePlainText(oldNoteId).empty());
+
+        // 重新调用 InitializeSchema 触发自动回填
+        assert(repo.InitializeSchema());
+        std::wstring backfilled = repo.GetNotePlainText(oldNoteId);
+        assert(!backfilled.empty());
+        assert(backfilled.find(L"原生") != std::wstring::npos);
+        assert(backfilled.find(L"全库加密") != std::wstring::npos);
+
+        // 搜索回填的正文中文
+        auto resBackfill = repo.SearchNotes(L"全库加密", false, true);
+        assert(!resBackfill.empty());
+        assert(resBackfill[0].nodeId == oldNoteId);
+
         db.Close();
     }
 

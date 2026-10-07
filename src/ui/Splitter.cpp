@@ -14,7 +14,6 @@ void Splitter::RegisterClassIfNeeded(HINSTANCE hInstance) {
 
     WNDCLASSEXW wc = {sizeof(WNDCLASSEXW)};
     wc.lpfnWndProc = [](HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) -> LRESULT {
-        // 使用与基类相同的调度机制
         auto* pThis = reinterpret_cast<Splitter*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
         if (uMsg == WM_NCCREATE) {
             auto* pCreate = reinterpret_cast<CREATESTRUCTW*>(lParam);
@@ -38,14 +37,18 @@ void Splitter::RegisterClassIfNeeded(HINSTANCE hInstance) {
     s_isRegistered = true;
 }
 
-bool Splitter::Initialize(HWND hParent, int x, int y, int height) {
+bool Splitter::Initialize(HWND hParent, int x, int y, int size, bool isHorizontal) {
+    m_isHorizontal = isHorizontal;
+    m_hCursor = LoadCursorW(nullptr, isHorizontal ? IDC_SIZENS : IDC_SIZEWE);
     RegisterClassIfNeeded(GetModuleHandleW(nullptr));
+    int width = isHorizontal ? size : 5;
+    int height = isHorizontal ? 5 : size;
     return Create(
         GetClassName(),
         L"",
         WS_CHILD | WS_VISIBLE,
         0,
-        x, y, 5, height,
+        x, y, width, height,
         hParent,
         nullptr,
         GetModuleHandleW(nullptr)
@@ -73,8 +76,11 @@ LRESULT Splitter::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             HWND hParent = GetParent(m_hWnd);
             if (hParent) {
                 ScreenToClient(hParent, &pt);
-                // 向父窗口传递新的 X 坐标
-                SendMessageW(hParent, WM_SPLITTER_MOVED, static_cast<WPARAM>(pt.x), 0);
+                if (m_isHorizontal) {
+                    SendMessageW(hParent, WM_SPLITTER_MOVED, static_cast<WPARAM>(pt.y), 1);
+                } else {
+                    SendMessageW(hParent, WM_SPLITTER_MOVED, static_cast<WPARAM>(pt.x), 0);
+                }
             }
         }
         return 0;

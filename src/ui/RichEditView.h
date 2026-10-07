@@ -5,6 +5,7 @@
 #include <richedit.h>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace anynote::ui {
 
@@ -55,9 +56,22 @@ public:
     void Paste();
     void SelectAll();
 
+    // 文本查找、替换与高亮标记
+    std::wstring GetPlainText() const;
+    bool FindAndSelect(const std::wstring& text, bool forward = true, bool matchCase = false, bool wholeWord = false, bool wrapAround = true);
+    int CountMatches(const std::wstring& text, bool matchCase = false, bool wholeWord = false) const;
+    bool SelectRange(LONG start, LONG end);
+    bool ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward = true, bool matchCase = false, bool wholeWord = false, bool wrapAround = true);
+    int ReplaceAll(const std::wstring& findText, const std::wstring& replaceText, bool matchCase = false, bool wholeWord = false);
+    int MarkAll(const std::wstring& text, bool matchCase = false, bool wholeWord = false);
+    void ClearMarks();
+    bool HasActiveMarks() const noexcept { return !m_markedRanges.empty(); }
+
 private:
     HWND m_hWnd = nullptr;
     HMODULE m_richEditModule = nullptr;
+    std::vector<CHARRANGE> m_markedRanges;
+    std::vector<CHARFORMAT2W> m_markedFormats;
 
     void ApplyDefaultFormatting(bool allDocument = false);
 };

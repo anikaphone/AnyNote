@@ -3,6 +3,7 @@
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
 #include <commctrl.h>
+#include <windowsx.h>
 #include <shlwapi.h>
 #include <commdlg.h>
 #include <algorithm>
@@ -233,7 +234,9 @@ INT_PTR CALLBACK SetPasswordDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
 
 static bool s_mainClassRegistered = false;
 
-MainWindow::MainWindow() = default;
+MainWindow::MainWindow()
+    : m_findReplaceDialog(m_richEditView) {
+}
 
 void MainWindow::RegisterClassIfNeeded(HINSTANCE hInstance) {
     if (s_mainClassRegistered) return;
@@ -257,7 +260,8 @@ void MainWindow::RegisterClassIfNeeded(HINSTANCE hInstance) {
     wc.hInstance = hInstance;
     wc.lpszClassName = GetClassName();
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+    wc.hIconSm = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 
     RegisterClassExW(&wc);
@@ -272,7 +276,7 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     if (!Create(
         GetClassName(),
         L"AnyNote - 树状富文本笔记 (C++ & Win32)",
-        WS_OVERLAPPEDWINDOW,
+        WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         0,
         CW_USEDEFAULT, CW_USEDEFAULT, 1200, 780,
         nullptr,
@@ -280,6 +284,16 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         hInstance
     )) {
         return false;
+    }
+
+    // 设置窗口大/小图标
+    HICON hIconBig = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+    HICON hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+    if (hIconBig) {
+        SendMessageW(m_hWnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(hIconBig));
+    }
+    if (hIconSmall) {
+        SendMessageW(m_hWnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hIconSmall));
     }
 
     RECT rcClient;
@@ -309,7 +323,7 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 未加密"));
 
     // 3. 初始化分割条
-    m_splitter.Initialize(m_hWnd, m_splitterPos, toolbarH, clientH - toolbarH - statusbarH);
+    m_splitter.Initialize(m_hWnd, m_splitterPos, toolbarH, clientH - toolbarH - statusbarH, false);
 
     // 4. 初始化左侧目录树
     m_treeView.Initialize(m_hWnd, 0, toolbarH, m_splitterPos, clientH - toolbarH - statusbarH, IDC_MAIN_TREEVIEW);
@@ -324,7 +338,24 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         return false;
     }
 
-    // 6. 打开默认便携笔记本并从数据库加载节点树
+    // 6. 初始化仿 Notepad++ 独立浮动查找/替换/标记对话框
+    m_findReplaceDialog.Initialize(m_hWnd);
+
+    // 7. 初始化下方水平分割条与全库搜索窗格
+    m_searchSplitter.Initialize(m_hWnd, m_splitterPos + 5, 0, clientW - m_splitterPos - 5, true);
+    m_searchPane.Initialize(m_hWnd, nullptr);
+    m_searchPane.SetOnResultSelected([this](const storage::SearchResult& result) {
+        OnSearchResultSelected(result);
+    });
+    m_searchPane.SetOnClose([this]() {
+        m_isSearchPaneVisible = false;
+        RECT rc;
+        GetClientRect(m_hWnd, &rc);
+        LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
+        SetFocus(m_richEditView.GetHwnd());
+    });
+
+    // 8. 打开默认便携笔记本并从数据库加载节点树
     OpenNotebook(GetDefaultNotebookPath(), "");
 
     LayoutChildren(clientW, clientH);
@@ -348,8 +379,29 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
     m_treeView.SetBounds(0, toolbarH, m_splitterPos, workH);
     m_splitter.SetBounds(m_splitterPos, toolbarH, 5, workH);
 
-    int editorW = std::max(50, clientWidth - m_splitterPos - 5);
-    m_richEditView.SetBounds(m_splitterPos + 5, toolbarH, editorW, workH);
+    int editorX = m_splitterPos + 5;
+    int editorW = std::max(50, clientWidth - editorX);
+
+    if (m_isSearchPaneVisible) {
+        const int splitterH = 5;
+        int maxPaneH = std::max(80, workH - 120);
+        m_searchPaneHeight = std::clamp(m_searchPaneHeight, 100, maxPaneH);
+
+        int editorH = std::max(40, workH - splitterH - m_searchPaneHeight);
+        int splitterY = toolbarH + editorH;
+        int paneY = splitterY + splitterH;
+
+        m_richEditView.SetBounds(editorX, toolbarH, editorW, editorH);
+        m_searchSplitter.SetBounds(editorX, splitterY, editorW, splitterH);
+        m_searchPane.SetBounds(editorX, paneY, editorW, m_searchPaneHeight);
+
+        ShowWindow(m_searchSplitter.GetHwnd(), SW_SHOW);
+        ShowWindow(m_searchPane.GetHwnd(), SW_SHOW);
+    } else {
+        m_richEditView.SetBounds(editorX, toolbarH, editorW, workH);
+        ShowWindow(m_searchSplitter.GetHwnd(), SW_HIDE);
+        ShowWindow(m_searchPane.GetHwnd(), SW_HIDE);
+    }
 
     if (m_hStatusBar) {
         SendMessageW(m_hStatusBar, WM_SIZE, 0, 0);
@@ -435,6 +487,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
 
     m_db = std::move(newDb);
     m_repo = std::move(newRepo);
+    m_searchPane.SetRepository(m_repo.get());
     m_currentNotebookPath = filePath;
 
     // 更新窗口标题
@@ -536,7 +589,8 @@ bool MainWindow::SaveActiveNote() {
     if (!m_repo || !m_richEditView.GetHwnd()) return false;
 
     std::string rtf = m_richEditView.StreamOutRTF();
-    if (!m_repo->UpdateNoteContent(m_activeNoteId, rtf)) {
+    std::wstring plainText = m_richEditView.GetPlainText();
+    if (!m_repo->UpdateNoteContent(m_activeNoteId, rtf, plainText)) {
         if (m_hStatusBar) {
             SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 保存失败"));
         }
@@ -582,6 +636,10 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
 
     if (!m_richEditView.GetHwnd()) return;
 
+    if (m_richEditView.HasActiveMarks()) {
+        m_richEditView.ClearMarks();
+    }
+
     if (m_activeNoteId > 0 && m_activeNoteId != newId) {
         if (!SaveActiveNote()) {
             if (pNmtv->itemOld.hItem) {
@@ -604,6 +662,21 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
         return 0;
 
+    case WM_CONTEXTMENU: {
+        HWND hWndTarget = reinterpret_cast<HWND>(wParam);
+        int xPos = GET_X_LPARAM(lParam);
+        int yPos = GET_Y_LPARAM(lParam);
+
+        if (hWndTarget == m_treeView.GetHwnd()) {
+            ShowTreeContextMenu(xPos, yPos);
+            return 0;
+        } else if (hWndTarget == m_richEditView.GetHwnd()) {
+            ShowEditorContextMenu(xPos, yPos);
+            return 0;
+        }
+        break;
+    }
+
     case WM_SIZE: {
         int width = LOWORD(lParam);
         int height = HIWORD(lParam);
@@ -622,10 +695,19 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_SPLITTER_MOVED: {
-        int newX = static_cast<int>(wParam);
+        int newPos = static_cast<int>(wParam);
+        int isHorizontal = static_cast<int>(lParam);
         RECT rc;
         GetClientRect(m_hWnd, &rc);
-        m_splitterPos = newX;
+        if (isHorizontal) {
+            UINT dpi = GetDpiForWindow(m_hWnd);
+            int statusbarH = MulDiv(24, dpi, 96);
+            int clientH = rc.bottom - rc.top;
+            int newPaneH = (clientH - statusbarH - 5) - newPos;
+            m_searchPaneHeight = std::max(60, newPaneH);
+        } else {
+            m_splitterPos = newPos;
+        }
         LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
         return 0;
     }
@@ -911,6 +993,30 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             m_richEditView.SelectAll();
             return 0;
 
+        // 搜索、替换、标记相关命令
+        case ID_EDIT_FIND:
+            OpenFindReplaceDialog(FindTabMode::Find);
+            return 0;
+        case ID_EDIT_REPLACE:
+            OpenFindReplaceDialog(FindTabMode::Replace);
+            return 0;
+        case ID_EDIT_MARK:
+            OpenFindReplaceDialog(FindTabMode::Mark);
+            return 0;
+        case ID_EDIT_FIND_NEXT:
+            m_findReplaceDialog.FindNext(true);
+            return 0;
+        case ID_EDIT_FIND_PREV:
+            m_findReplaceDialog.FindNext(false);
+            return 0;
+        case ID_SEARCH_GLOBAL:
+            if (!m_isSearchPaneVisible) {
+                ToggleSearchPane();
+            } else {
+                m_searchPane.FocusSearchBox();
+            }
+            return 0;
+
         // 插入当前时间戳
         case ID_INSERT_DATETIME: {
             auto now = std::chrono::system_clock::now();
@@ -998,6 +1104,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         }
+
+        case ID_TREE_EXPAND_ALL:
+            m_treeView.ExpandAll(true);
+            return 0;
+
+        case ID_TREE_COLLAPSE_ALL:
+            m_treeView.ExpandAll(false);
+            return 0;
 
         case ID_FILE_SAVE:
             if (SaveActiveNote()) {
@@ -1099,6 +1213,187 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     return common::Window::HandleMessage(uMsg, wParam, lParam);
+}
+
+bool MainWindow::SelectNodeById(int64_t nodeId) {
+    if (!m_treeView.GetHwnd() || nodeId <= 0) return false;
+
+    std::function<HTREEITEM(HTREEITEM)> findItem = [&](HTREEITEM hItem) -> HTREEITEM {
+        while (hItem) {
+            if (static_cast<int64_t>(m_treeView.GetItemData(hItem)) == nodeId) {
+                return hItem;
+            }
+            HTREEITEM hChild = TreeView_GetChild(m_treeView.GetHwnd(), hItem);
+            if (hChild) {
+                HTREEITEM found = findItem(hChild);
+                if (found) return found;
+            }
+            hItem = TreeView_GetNextSibling(m_treeView.GetHwnd(), hItem);
+        }
+        return nullptr;
+    };
+
+    HTREEITEM hRoot = TreeView_GetRoot(m_treeView.GetHwnd());
+    HTREEITEM targetItem = findItem(hRoot);
+    if (targetItem) {
+        m_treeView.SelectItem(targetItem);
+        m_treeView.EnsureVisible(targetItem);
+        return true;
+    }
+    return false;
+}
+
+void MainWindow::OpenFindReplaceDialog(FindTabMode mode) {
+    m_findReplaceDialog.ShowTab(mode);
+}
+
+void MainWindow::ToggleSearchPane() {
+    m_isSearchPaneVisible = !m_isSearchPaneVisible;
+    RECT rc;
+    GetClientRect(m_hWnd, &rc);
+    LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
+    m_searchPane.ShowPane(m_isSearchPaneVisible);
+    if (!m_isSearchPaneVisible) {
+        SetFocus(m_richEditView.GetHwnd());
+    }
+}
+
+void MainWindow::OnSearchResultSelected(const storage::SearchResult& result) {
+    SelectNodeById(result.nodeId);
+
+    if (!result.matchInTitle) {
+        std::wstring kw = m_searchPane.GetSearchKeyword();
+        if (!kw.empty()) {
+            CHARRANGE cr = {0, 0};
+            SendMessageW(m_richEditView.GetHwnd(), EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+            m_richEditView.FindAndSelect(kw, true, m_searchPane.IsMatchCase(), false);
+        } else if (result.matchOffsetInText >= 0) {
+            m_richEditView.SelectRange(result.matchOffsetInText, result.matchOffsetInText + 1);
+        }
+    }
+    SetFocus(m_richEditView.GetHwnd());
+}
+
+void MainWindow::ShowTreeContextMenu(int xScreen, int yScreen) {
+    if (!m_treeView.GetHwnd()) return;
+
+    POINT ptScreen = { xScreen, yScreen };
+    HTREEITEM hHit = nullptr;
+
+    if (xScreen == -1 && yScreen == -1) {
+        hHit = m_treeView.GetSelectedItem();
+        if (hHit) {
+            RECT rcItem = m_treeView.GetItemRect(hHit, true);
+            ptScreen.x = rcItem.left;
+            ptScreen.y = rcItem.bottom;
+            ClientToScreen(m_treeView.GetHwnd(), &ptScreen);
+        } else {
+            RECT rcTree;
+            GetClientRect(m_treeView.GetHwnd(), &rcTree);
+            ptScreen.x = rcTree.left + 20;
+            ptScreen.y = rcTree.top + 20;
+            ClientToScreen(m_treeView.GetHwnd(), &ptScreen);
+        }
+    } else {
+        POINT ptClient = ptScreen;
+        ScreenToClient(m_treeView.GetHwnd(), &ptClient);
+        UINT flags = 0;
+        hHit = m_treeView.HitTest(ptClient, &flags);
+        if (hHit) {
+            m_treeView.SelectItem(hHit);
+        }
+    }
+
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return;
+
+    if (hHit) {
+        AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_NOTE, L"新建笔记(&N)\tCtrl+N");
+        AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_SUB_NOTE, L"新建子笔记(&S)\tCtrl+Shift+N");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, ID_FILE_RENAME_NOTE, L"重命名(&R)\tF2");
+        AppendMenuW(hMenu, MF_STRING, ID_FILE_DELETE_NOTE, L"删除(&D)\tDel");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_EXPAND_ALL, L"全部展开(&E)");
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_COLLAPSE_ALL, L"全部折叠(&C)");
+    } else {
+        AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_NOTE, L"新建根笔记(&N)\tCtrl+N");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_EXPAND_ALL, L"全部展开(&E)");
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_COLLAPSE_ALL, L"全部折叠(&C)");
+    }
+
+    SetForegroundWindow(m_hWnd);
+    TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, ptScreen.x, ptScreen.y, 0, m_hWnd, nullptr);
+    DestroyMenu(hMenu);
+}
+
+void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
+    if (!m_richEditView.GetHwnd()) return;
+
+    POINT ptScreen = { xScreen, yScreen };
+    if (xScreen == -1 && yScreen == -1) {
+        CHARRANGE sel = {};
+        SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+        POINTL ptl = {};
+        SendMessageW(m_richEditView.GetHwnd(), EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptl), sel.cpMin);
+        ptScreen.x = ptl.x;
+        ptScreen.y = ptl.y + 20;
+        ClientToScreen(m_richEditView.GetHwnd(), &ptScreen);
+    }
+
+    HMENU hMenu = CreatePopupMenu();
+    if (!hMenu) return;
+
+    bool canUndo = SendMessageW(m_richEditView.GetHwnd(), EM_CANUNDO, 0, 0) != 0;
+    bool canRedo = SendMessageW(m_richEditView.GetHwnd(), EM_CANREDO, 0, 0) != 0;
+
+    CHARRANGE sel = {};
+    SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+    bool hasSel = (sel.cpMax > sel.cpMin);
+
+    bool canPaste = (IsClipboardFormatAvailable(CF_UNICODETEXT) ||
+                     IsClipboardFormatAvailable(CF_TEXT) ||
+                     IsClipboardFormatAvailable(CF_BITMAP) ||
+                     IsClipboardFormatAvailable(CF_DIB));
+
+    // 1. 撤销/重做
+    AppendMenuW(hMenu, MF_STRING | (canUndo ? MF_ENABLED : MF_GRAYED), ID_EDIT_UNDO, L"撤销(&U)\tCtrl+Z");
+    AppendMenuW(hMenu, MF_STRING | (canRedo ? MF_ENABLED : MF_GRAYED), ID_EDIT_REDO, L"恢复(&R)\tCtrl+Y");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+    // 2. 剪切/复制/粘贴/全选
+    AppendMenuW(hMenu, MF_STRING | (hasSel ? MF_ENABLED : MF_GRAYED), ID_EDIT_CUT, L"剪切(&T)\tCtrl+X");
+    AppendMenuW(hMenu, MF_STRING | (hasSel ? MF_ENABLED : MF_GRAYED), ID_EDIT_COPY, L"复制(&C)\tCtrl+C");
+    AppendMenuW(hMenu, MF_STRING | (canPaste ? MF_ENABLED : MF_GRAYED), ID_EDIT_PASTE, L"粘贴(&P)\tCtrl+V");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_EDIT_SELECTALL, L"全选(&A)\tCtrl+A");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+
+    // 3. 常用格式快速排版子菜单
+    HMENU hSubFormat = CreatePopupMenu();
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_BOLD, L"粗体(&B)\tCtrl+B");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_ITALIC, L"斜体(&I)\tCtrl+I");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_UNDERLINE, L"下划线(&U)\tCtrl+U");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_STRIKE, L"删除线(&S)");
+    AppendMenuW(hSubFormat, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_0, L"正文(&0)\tCtrl+0");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_1, L"标题 1(&1)\tCtrl+1");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_2, L"标题 2(&2)\tCtrl+2");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_3, L"标题 3(&3)\tCtrl+3");
+    AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_4, L"标题 4(&4)\tCtrl+4");
+    AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubFormat), L"格式(&O)");
+
+    // 4. 插入与查找
+    AppendMenuW(hMenu, MF_STRING, ID_FORMAT_CODE_BLOCK, L"插入代码块(&K)...\tCtrl+K");
+    AppendMenuW(hMenu, MF_STRING, ID_INSERT_DATETIME, L"插入当前时间戳(&D)");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(hMenu, MF_STRING, ID_EDIT_FIND, L"在当前笔记中查找(&F)...\tCtrl+F");
+    AppendMenuW(hMenu, MF_STRING, ID_EDIT_REPLACE, L"替换(&R)...\tCtrl+H");
+
+    SetForegroundWindow(m_hWnd);
+    TrackPopupMenu(hMenu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, ptScreen.x, ptScreen.y, 0, m_hWnd, nullptr);
+    DestroyMenu(hMenu);
 }
 
 } // namespace anynote::ui
