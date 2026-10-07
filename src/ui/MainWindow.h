@@ -33,7 +33,7 @@ private:
 
     bool OpenNotebook(const std::wstring& filePath, const std::string& password = "");
     void PopulateTreeViewFromDb();
-    void SaveActiveNote();
+    bool SaveActiveNote();
     void LoadNoteForId(int64_t nodeId);
     void UpdateEncryptionStatusUI();
 
@@ -47,6 +47,7 @@ private:
     std::unique_ptr<storage::NoteRepository> m_repo;
     int64_t m_activeNoteId = 0;
     std::wstring m_currentNotebookPath;
+    bool m_revertingTreeSelection = false;
 
     int m_splitterPos = 260; // 默认分割条 X 坐标
 };

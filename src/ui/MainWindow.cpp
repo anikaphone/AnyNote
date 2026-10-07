@@ -390,10 +390,7 @@ void MainWindow::ShowInsertCodeDialog() {
 }
 
 bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& password) {
-    if (m_activeNoteId > 0) {
-        SaveActiveNote();
-        m_activeNoteId = 0;
-    }
+    if (!SaveActiveNote()) return false;
 
     auto newDb = std::make_unique<storage::Database>();
     std::string currentPwd = password;
@@ -502,15 +499,23 @@ void MainWindow::PopulateTreeViewFromDb() {
     }
 }
 
-void MainWindow::SaveActiveNote() {
-    if (m_activeNoteId <= 0 || !m_repo || !m_richEditView.GetHwnd()) return;
+bool MainWindow::SaveActiveNote() {
+    if (m_activeNoteId <= 0) return true;
+    if (!m_repo || !m_richEditView.GetHwnd()) return false;
 
     std::string rtf = m_richEditView.StreamOutRTF();
-    m_repo->UpdateNoteContent(m_activeNoteId, rtf);
+    if (!m_repo->UpdateNoteContent(m_activeNoteId, rtf)) {
+        if (m_hStatusBar) {
+            SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 保存失败"));
+        }
+        MessageBoxW(m_hWnd, L"当前笔记保存失败，原笔记本仍保持打开状态。", L"保存失败", MB_OK | MB_ICONERROR);
+        return false;
+    }
 
     if (m_hStatusBar) {
         SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
     }
+    return true;
 }
 
 void MainWindow::LoadNoteForId(int64_t nodeId) {
@@ -526,6 +531,7 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
 
 void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
     if (!pNmtv) return;
+    if (m_revertingTreeSelection) return;
 
     if (!pNmtv->itemNew.hItem) {
         if (m_richEditView.GetHwnd()) {
@@ -545,7 +551,15 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
     if (!m_richEditView.GetHwnd()) return;
 
     if (m_activeNoteId > 0 && m_activeNoteId != newId) {
-        SaveActiveNote();
+        if (!SaveActiveNote()) {
+            if (pNmtv->itemOld.hItem) {
+                m_revertingTreeSelection = true;
+                m_treeView.SelectItem(pNmtv->itemOld.hItem);
+                m_revertingTreeSelection = false;
+                UpdateStatusBar(L"当前笔记: " + m_treeView.GetItemText(pNmtv->itemOld.hItem));
+            }
+            return;
+        }
     }
 
     m_activeNoteId = newId;
@@ -725,11 +739,16 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
         // 树节点增删
         case ID_FILE_NEW_NOTE: {
-            SaveActiveNote();
+            if (!SaveActiveNote()) return 0;
             HTREEITEM hCur = m_treeView.GetSelectedItem();
             HTREEITEM hParent = hCur ? TreeView_GetParent(m_treeView.GetHwnd(), hCur) : nullptr;
             int64_t parentId = hParent ? static_cast<int64_t>(m_treeView.GetItemData(hParent)) : 0;
             int64_t newId = m_repo ? m_repo->CreateNote(parentId, L"新建笔记", -1, 0, "") : 0;
+            if (newId <= 0) {
+                std::wstring error = m_db ? anynote::utils::Utf8ToWide(m_db->GetLastError()) : L"数据库未打开";
+                MessageBoxW(m_hWnd, (L"创建笔记失败：\r\n" + error).c_str(), L"数据库错误", MB_OK | MB_ICONERROR);
+                return 0;
+            }
 
             HTREEITEM hNew = m_treeView.InsertNode(hParent, L"新建笔记", static_cast<LPARAM>(newId), true);
             if (hNew) {
@@ -740,10 +759,15 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case ID_FILE_NEW_SUB_NOTE: {
-            SaveActiveNote();
+            if (!SaveActiveNote()) return 0;
             HTREEITEM hCur = m_treeView.GetSelectedItem();
             int64_t parentId = hCur ? static_cast<int64_t>(m_treeView.GetItemData(hCur)) : 0;
             int64_t newId = m_repo ? m_repo->CreateNote(parentId, L"新建子笔记", -1, 0, "") : 0;
+            if (newId <= 0) {
+                std::wstring error = m_db ? anynote::utils::Utf8ToWide(m_db->GetLastError()) : L"数据库未打开";
+                MessageBoxW(m_hWnd, (L"创建子笔记失败：\r\n" + error).c_str(), L"数据库错误", MB_OK | MB_ICONERROR);
+                return 0;
+            }
 
             HTREEITEM hNew = m_treeView.InsertNode(hCur, L"新建子笔记", static_cast<LPARAM>(newId), true);
             if (hNew) {
@@ -765,12 +789,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             HTREEITEM hCur = m_treeView.GetSelectedItem();
             if (hCur && MessageBoxW(m_hWnd, L"确定要删除当前选中的笔记及其所有子笔记吗？此操作无法撤销。", L"确认删除", MB_YESNO | MB_ICONQUESTION) == IDYES) {
                 int64_t nodeId = static_cast<int64_t>(m_treeView.GetItemData(hCur));
+                if (!m_repo || !m_repo->DeleteNote(nodeId)) {
+                    std::wstring error = m_db ? anynote::utils::Utf8ToWide(m_db->GetLastError()) : L"数据库未打开";
+                    MessageBoxW(m_hWnd, (L"删除笔记失败：\r\n" + error).c_str(), L"数据库错误", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
                 if (m_activeNoteId == nodeId) {
                     m_activeNoteId = 0;
                     m_richEditView.SetText(L"");
-                }
-                if (m_repo) {
-                    m_repo->DeleteNote(nodeId);
                 }
                 m_treeView.DeleteItem(hCur);
             }
@@ -778,10 +804,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
 
         case ID_FILE_SAVE:
-            SaveActiveNote();
-            UpdateStatusBar(L"笔记本已保存至数据库");
-            if (m_hStatusBar) {
-                SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
+            if (SaveActiveNote()) {
+                UpdateStatusBar(L"笔记本已保存至数据库");
+                if (m_hStatusBar) {
+                    SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
+                }
             }
             return 0;
 
@@ -855,14 +882,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         case ID_FILE_EXIT:
-            DestroyWindow(m_hWnd);
+            SendMessageW(m_hWnd, WM_CLOSE, 0, 0);
             return 0;
         }
         break;
     }
 
     case WM_CLOSE:
-        SaveActiveNote();
+        if (!SaveActiveNote()) return 0;
         DestroyWindow(m_hWnd);
         return 0;
 

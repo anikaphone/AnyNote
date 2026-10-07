@@ -302,7 +302,7 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
 
     int64_t now = GetCurrentUnixTimestamp();
 
-    m_db.BeginTransaction();
+    if (!m_db.BeginTransaction()) return 0;
 
     Database::Statement insStmt;
     if (!insStmt.Prepare(m_db, "INSERT INTO nodes (parent_id, sequence, title, node_type, created_time, modified_time) VALUES (?, ?, ?, ?, ?, ?);")) {
@@ -342,7 +342,10 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
         return 0;
     }
 
-    m_db.Commit();
+    if (!m_db.Commit()) {
+        m_db.Rollback();
+        return 0;
+    }
     return newId;
 }
 
@@ -364,7 +367,7 @@ bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfCon
     if (!m_db.IsOpen()) return false;
 
     int64_t now = GetCurrentUnixTimestamp();
-    m_db.BeginTransaction();
+    if (!m_db.BeginTransaction()) return false;
 
     Database::Statement cntStmt;
     if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf) VALUES (?, 1, ?) ON CONFLICT(node_id) DO UPDATE SET content_rtf = excluded.content_rtf;")) {
@@ -385,13 +388,19 @@ bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfCon
     }
 
     Database::Statement nodeStmt;
-    if (nodeStmt.Prepare(m_db, "UPDATE nodes SET modified_time = ? WHERE id = ?;")) {
-        nodeStmt.BindInt64(1, now);
-        nodeStmt.BindInt64(2, nodeId);
-        nodeStmt.Step();
+    if (!nodeStmt.Prepare(m_db, "UPDATE nodes SET modified_time = ? WHERE id = ?;")) {
+        m_db.Rollback();
+        return false;
+    }
+    if (!nodeStmt.BindInt64(1, now) || !nodeStmt.BindInt64(2, nodeId) || nodeStmt.Step() != SQLITE_DONE) {
+        m_db.Rollback();
+        return false;
     }
 
-    m_db.Commit();
+    if (!m_db.Commit()) {
+        m_db.Rollback();
+        return false;
+    }
     return true;
 }
 
@@ -413,32 +422,40 @@ bool NoteRepository::UpdateNodeHierarchy(int64_t nodeId, int64_t newParentId, in
 bool NoteRepository::DeleteNote(int64_t nodeId) {
     if (!m_db.IsOpen()) return false;
 
-    m_db.BeginTransaction();
+    if (!m_db.BeginTransaction()) return false;
 
     // 递归删除所有后代正文
     Database::Statement cntStmt;
-    if (cntStmt.Prepare(m_db,
+    if (!cntStmt.Prepare(m_db,
         "WITH RECURSIVE to_delete AS ("
         "  SELECT ? AS id UNION ALL SELECT n.id FROM nodes n JOIN to_delete d ON n.parent_id = d.id"
         ") DELETE FROM node_contents WHERE node_id IN (SELECT id FROM to_delete);")) {
-        cntStmt.BindInt64(1, nodeId);
-        cntStmt.Step();
+        m_db.Rollback();
+        return false;
+    }
+    if (!cntStmt.BindInt64(1, nodeId) || cntStmt.Step() != SQLITE_DONE) {
+        m_db.Rollback();
+        return false;
     }
 
     // 递归删除所有后代节点
     Database::Statement nodeStmt;
-    if (nodeStmt.Prepare(m_db,
+    if (!nodeStmt.Prepare(m_db,
         "WITH RECURSIVE to_delete AS ("
         "  SELECT ? AS id UNION ALL SELECT n.id FROM nodes n JOIN to_delete d ON n.parent_id = d.id"
         ") DELETE FROM nodes WHERE id IN (SELECT id FROM to_delete);")) {
-        nodeStmt.BindInt64(1, nodeId);
-        if (nodeStmt.Step() != SQLITE_DONE) {
-            m_db.Rollback();
-            return false;
-        }
+        m_db.Rollback();
+        return false;
+    }
+    if (!nodeStmt.BindInt64(1, nodeId) || nodeStmt.Step() != SQLITE_DONE) {
+        m_db.Rollback();
+        return false;
     }
 
-    m_db.Commit();
+    if (!m_db.Commit()) {
+        m_db.Rollback();
+        return false;
+    }
     return true;
 }
 

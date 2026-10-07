@@ -55,6 +55,14 @@ bool Database::Open(const std::wstring& filePath, const std::string& password) {
     // 启用 WAL 模式与外键约束以提高并发写入性能和数据完整性
     sqlite3_busy_timeout(m_db, 5000);
 
+    // SQLite3MC 2.5 默认使用 ChaCha20；项目格式明确约定使用 AES-256-CBC。
+    int aes256Cipher = sqlite3mc_cipher_index("aes256cbc");
+    if (aes256Cipher <= 0 || sqlite3mc_config(m_db, "cipher", aes256Cipher) != aes256Cipher) {
+        m_lastError = "配置 AES-256 加密算法失败";
+        Close();
+        return false;
+    }
+
     // 如果提供了密码，调用 sqlite3_key 进行密钥注入
     if (!password.empty()) {
         rc = sqlite3_key(m_db, password.data(), static_cast<int>(password.size()));
@@ -82,9 +90,15 @@ bool Database::Open(const std::wstring& filePath, const std::string& password) {
         return false;
     }
 
-    // 开启外键与常规同步模式
-    Execute("PRAGMA foreign_keys = ON;");
-    Execute("PRAGMA synchronous = NORMAL;");
+    // 开启 WAL、外键与常规同步模式；任何失败都不能继续伪装成可写数据库。
+    if (!Execute("PRAGMA journal_mode = WAL;")) {
+        Close();
+        return false;
+    }
+    if (!Execute("PRAGMA foreign_keys = ON;") || !Execute("PRAGMA synchronous = NORMAL;")) {
+        Close();
+        return false;
+    }
 
     return true;
 }
