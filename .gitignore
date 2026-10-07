@@ -1,0 +1,72 @@
+# ==========================================
+# AnyNote - CMake & C++ Windows Project
+# ==========================================
+
+# CMake 构建目录与输出产物
+build/
+bin/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+Testing/
+Makefile
+
+# 本地用户专属 CMake Presets（团队共享 CMakePresets.json，个人配置 CMakeUserPresets.json）
+CMakeUserPresets.json
+
+# Visual Studio & MSVC 临时缓存与配置
+.vs/
+*.sln.docstates
+*.suo
+*.user
+*.userosv
+*.userprefs
+*.ncb
+*.aps
+*.opendb
+*.db
+*.VC.opendb
+*.VC.db
+
+# MSVC 编译产物与目标文件
+*.obj
+*.ilk
+*.pdb
+*.tlog
+*.idb
+*.res
+*.rc.res
+*.exe
+*.dll
+*.lib
+*.exp
+*.log
+
+# vcpkg 本地依赖安装目录
+vcpkg_installed/
+
+# JetBrains / CLion
+.idea/
+cmake-build-*/
+
+# Visual Studio Code 本地配置（保留共享的工作区与配置文件）
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Windows 系统缓存与元数据
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 临时与备份文件
+*.tmp
+*.bak
+*~
+

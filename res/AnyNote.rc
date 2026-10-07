@@ -1,0 +1,90 @@
+﻿#include <windows.h>
+#include "resource.h"
+
+// 主菜单
+IDR_MAIN_MENU MENU
+BEGIN
+    POPUP "文件(&F)"
+    BEGIN
+        MENUITEM "新建同级笔记(&N)\tCtrl+N",     ID_FILE_NEW_NOTE
+        MENUITEM "新建子笔记(&S)\tCtrl+Shift+N", ID_FILE_NEW_SUB_NOTE
+        MENUITEM "重命名笔记(&R)\tF2",           ID_FILE_RENAME_NOTE
+        MENUITEM "删除选中笔记(&D)\tDel",         ID_FILE_DELETE_NOTE
+        MENUITEM SEPARATOR
+        MENUITEM "新建笔记本(&B)...",             ID_FILE_NEW_NOTEBOOK
+        MENUITEM "打开笔记本(&O)...",             ID_FILE_OPEN_NOTEBOOK
+        MENUITEM "保存笔记本(&S)\tCtrl+S",        ID_FILE_SAVE
+        MENUITEM SEPARATOR
+        MENUITEM "退出(&X)\tAlt+F4",             ID_FILE_EXIT
+    END
+
+    POPUP "编辑(&E)"
+    BEGIN
+        MENUITEM "撤销(&U)\tCtrl+Z",             ID_EDIT_UNDO
+        MENUITEM "恢复(&R)\tCtrl+Y",             ID_EDIT_REDO
+        MENUITEM SEPARATOR
+        MENUITEM "剪切(&T)\tCtrl+X",             ID_EDIT_CUT
+        MENUITEM "复制(&C)\tCtrl+C",             ID_EDIT_COPY
+        MENUITEM "粘贴(&P)\tCtrl+V",             ID_EDIT_PASTE
+        MENUITEM SEPARATOR
+        MENUITEM "全选(&A)\tCtrl+A",             ID_EDIT_SELECTALL
+    END
+
+    POPUP "格式(&O)"
+    BEGIN
+        MENUITEM "粗体(&B)\tCtrl+B",             ID_FORMAT_BOLD
+        MENUITEM "斜体(&I)\tCtrl+I",             ID_FORMAT_ITALIC
+        MENUITEM "下划线(&U)\tCtrl+U",           ID_FORMAT_UNDERLINE
+        MENUITEM "删除线(&S)",                   ID_FORMAT_STRIKE
+    END
+
+    POPUP "插入(&I)"
+    BEGIN
+        MENUITEM "插入代码块(&C)\tCtrl+K",        ID_FORMAT_CODE_BLOCK
+        MENUITEM SEPARATOR
+        MENUITEM "项目符号列表(&L)",             ID_FORMAT_BULLET_LIST
+        MENUITEM "编号列表(&N)",                 ID_FORMAT_NUMBER_LIST
+        MENUITEM SEPARATOR
+        MENUITEM "插入图片(&P)...",              ID_INSERT_IMAGE
+        MENUITEM "插入当前日期时间(&D)",          ID_INSERT_DATETIME
+    END
+
+    POPUP "安全(&S)"
+    BEGIN
+        MENUITEM "设置 / 修改笔记本密码(&P)...",  ID_SECURITY_ENCRYPT
+    END
+
+    POPUP "帮助(&H)"
+    BEGIN
+        MENUITEM "关于 AnyNote(&A)...",          ID_HELP_ABOUT
+    END
+END
+
+// 快捷键表
+IDR_ACCELERATOR ACCELERATORS
+BEGIN
+    "N", ID_FILE_NEW_NOTE,      VIRTKEY, CONTROL
+    "N", ID_FILE_NEW_SUB_NOTE,  VIRTKEY, CONTROL, SHIFT
+    "S", ID_FILE_SAVE,          VIRTKEY, CONTROL
+    VK_F2, ID_FILE_RENAME_NOTE, VIRTKEY
+    "Z", ID_EDIT_UNDO,          VIRTKEY, CONTROL
+    "Y", ID_EDIT_REDO,          VIRTKEY, CONTROL
+    "B", ID_FORMAT_BOLD,        VIRTKEY, CONTROL
+    "I", ID_FORMAT_ITALIC,      VIRTKEY, CONTROL
+    "U", ID_FORMAT_UNDERLINE,   VIRTKEY, CONTROL
+    "K", ID_FORMAT_CODE_BLOCK,  VIRTKEY, CONTROL
+END
+
+// 插入代码块对话框
+IDD_INSERT_CODE DIALOGEX 0, 0, 360, 240
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "插入代码块 (CodeBox)"
+FONT 9, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "代码语言(&L):", IDC_STATIC, 12, 12, 50, 10
+    COMBOBOX        IDC_CODE_LANG, 68, 10, 130, 140, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "代码内容(&C):", IDC_STATIC, 12, 30, 50, 10
+    EDITTEXT        IDC_CODE_TEXT, 12, 42, 336, 162, ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_HSCROLL | WS_BORDER | WS_TABSTOP
+    DEFPUSHBUTTON   "插入代码块(&I)", IDOK, 218, 214, 64, 16
+    PUSHBUTTON      "取消(&C)", IDCANCEL, 288, 214, 60, 16
+END
