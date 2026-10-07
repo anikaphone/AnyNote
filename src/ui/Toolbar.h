@@ -26,7 +26,11 @@ private:
     HWND m_hHeadingCombo = nullptr;
     HFONT m_hFont = nullptr;
     UINT m_fontDpi = 0;
+    HIMAGELIST m_hImageList = nullptr;
+    UINT m_imageDpi = 0;
+
     void UpdateFontForDpi(UINT dpi);
+    void UpdateImageListForDpi(UINT dpi);
 };
 
 } // namespace anynote::ui

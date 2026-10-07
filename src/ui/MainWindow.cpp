@@ -3,6 +3,7 @@
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
 #include <commctrl.h>
+#include <uxtheme.h>
 #include <windowsx.h>
 #include <shlwapi.h>
 #include <commdlg.h>
@@ -302,25 +303,65 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     int clientH = rcClient.bottom - rcClient.top;
 
     UINT dpi = GetDpiForWindow(m_hWnd);
-    int toolbarH = MulDiv(36, dpi, 96);
     int statusbarH = MulDiv(24, dpi, 96);
 
     // 1. 初始化顶部格式工具栏
     m_toolbar.Initialize(m_hWnd, IDC_MAIN_TOOLBAR);
+    int toolbarH = m_toolbar.GetPreferredHeight();
 
-    // 2. 初始化底部状态栏
-    m_hStatusBar = CreateStatusWindowW(
-        WS_CHILD | WS_VISIBLE | SBARS_SIZEGRIP,
-        L"就绪",
+    // 2. 初始化底部状态栏 (纯白现代无边框扁平风格，移除老旧 SBARS_SIZEGRIP，纵向紧凑美观)
+    m_hStatusBar = CreateWindowExW(
+        0,
+        STATUSCLASSNAME,
+        L"",
+        WS_CHILD | WS_VISIBLE,
+        0, 0, 0, 0,
         m_hWnd,
-        IDC_MAIN_STATUSBAR
+        reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_MAIN_STATUSBAR)),
+        GetModuleHandleW(nullptr),
+        nullptr
     );
 
-    int statWidths[] = { 450, 650, -1 };
+    if (m_hStatusBar) {
+        SetWindowTheme(m_hStatusBar, L"", L"");
+        SendMessageW(m_hStatusBar, SB_SETBKCOLOR, 0, static_cast<LPARAM>(RGB(255, 255, 255)));
+        SendMessageW(m_hStatusBar, SB_SETMINHEIGHT, MulDiv(20, dpi, 96), 0);
+
+        SetWindowSubclass(m_hStatusBar, [](HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR /*dwRefData*/) -> LRESULT {
+            LRESULT lr = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (uMsg == WM_PAINT) {
+                HDC hdc = GetDC(hWnd);
+                if (hdc) {
+                    RECT rc;
+                    GetClientRect(hWnd, &rc);
+                    HBRUSH hLine = CreateSolidBrush(RGB(226, 230, 234));
+                    RECT lineRc = { rc.left, rc.top, rc.right, rc.top + 1 };
+                    FillRect(hdc, &lineRc, hLine);
+                    DeleteObject(hLine);
+                    ReleaseDC(hWnd, hdc);
+                }
+            }
+            if (uMsg == WM_NCDESTROY) {
+                RemoveWindowSubclass(hWnd, nullptr, uIdSubclass);
+            }
+            return lr;
+        }, 1, 0);
+
+        HFONT hStatusFont = CreateFontW(
+            -MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
+        );
+        if (hStatusFont) {
+            SendMessageW(m_hStatusBar, WM_SETFONT, reinterpret_cast<WPARAM>(hStatusFont), TRUE);
+        }
+    }
+
+    int statWidths[] = { MulDiv(380, dpi, 96), MulDiv(580, dpi, 96), -1 };
     SendMessageW(m_hStatusBar, SB_SETPARTS, 3, reinterpret_cast<LPARAM>(statWidths));
-    SendMessageW(m_hStatusBar, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(L"就绪 | 欢迎使用 AnyNote"));
-    SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
-    SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 未加密"));
+    SendMessageW(m_hStatusBar, SB_SETTEXTW, 0 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"就绪 | 欢迎使用 AnyNote"));
+    SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 已保存"));
+    SendMessageW(m_hStatusBar, SB_SETTEXTW, 2 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"加密: 未加密"));
 
     // 3. 初始化分割条
     m_splitter.Initialize(m_hWnd, m_splitterPos, toolbarH, clientH - toolbarH - statusbarH, false);
@@ -370,7 +411,7 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
 
     UINT dpi = GetDpiForWindow(m_hWnd);
     int toolbarH = m_toolbar.GetPreferredHeight();
-    int statusbarH = MulDiv(24, dpi, 96);
+    int statusbarH = MulDiv(21, dpi, 96);
     int workH = std::max(100, clientHeight - toolbarH - statusbarH);
 
     m_toolbar.SetBounds(0, 0, clientWidth, toolbarH);
@@ -410,7 +451,7 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
 
 void MainWindow::UpdateStatusBar(const std::wstring& text) {
     if (m_hStatusBar) {
-        SendMessageW(m_hStatusBar, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str()));
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 0 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(text.c_str()));
     }
 }
 
@@ -418,9 +459,9 @@ void MainWindow::UpdateEncryptionStatusUI() {
     if (!m_hStatusBar) return;
 
     if (m_db && m_db->IsEncrypted()) {
-        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 已加密 (AES-256)"));
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"加密: 已加密 (AES-256)"));
     } else {
-        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2, reinterpret_cast<LPARAM>(L"加密: 未加密"));
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 2 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"加密: 未加密"));
     }
 }
 
@@ -592,14 +633,14 @@ bool MainWindow::SaveActiveNote() {
     std::wstring plainText = m_richEditView.GetPlainText();
     if (!m_repo->UpdateNoteContent(m_activeNoteId, rtf, plainText)) {
         if (m_hStatusBar) {
-            SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 保存失败"));
+            SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 保存失败"));
         }
         MessageBoxW(m_hWnd, L"当前笔记保存失败，原笔记本仍保持打开状态。", L"保存失败", MB_OK | MB_ICONERROR);
         return false;
     }
 
     if (m_hStatusBar) {
-        SendMessageW(m_hStatusBar, SB_SETTEXTW, 1, reinterpret_cast<LPARAM>(L"状态: 已保存"));
+        SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 已保存"));
     }
     return true;
 }
@@ -852,8 +893,61 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     case WM_NOTIFY: {
         auto* pNmhdr = reinterpret_cast<NMHDR*>(lParam);
+        if (pNmhdr && pNmhdr->hwndFrom == m_toolbar.GetHwnd() && pNmhdr->code == NM_CUSTOMDRAW) {
+            auto* draw = reinterpret_cast<NMTBCUSTOMDRAW*>(lParam);
+            if (draw->nmcd.dwDrawStage == CDDS_PREERASE) {
+                FillRect(draw->nmcd.hdc, &draw->nmcd.rc,
+                    static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+                return CDRF_SKIPDEFAULT;
+            }
+            return CDRF_DODEFAULT;
+        }
+        if (pNmhdr) {
+            if (pNmhdr->code == TTN_GETDISPINFOW || pNmhdr->code == TTN_NEEDTEXTW) {
+                auto* pDispInfo = reinterpret_cast<NMTTDISPINFOW*>(lParam);
+                const wchar_t* tipText = nullptr;
+                switch (pDispInfo->hdr.idFrom) {
+                case ID_FORMAT_BOLD:        tipText = L"加粗 (Ctrl+B)"; break;
+                case ID_FORMAT_ITALIC:      tipText = L"斜体 (Ctrl+I)"; break;
+                case ID_FORMAT_UNDERLINE:   tipText = L"下划线 (Ctrl+U)"; break;
+                case ID_FORMAT_CODE_BLOCK:  tipText = L"代码块 (Ctrl+K)"; break;
+                case ID_FORMAT_BULLET_LIST: tipText = L"项目符号列表"; break;
+                case ID_FORMAT_NUMBER_LIST: tipText = L"编号列表"; break;
+                case ID_INSERT_IMAGE:       tipText = L"插入图片"; break;
+                case ID_FILE_SAVE:          tipText = L"保存笔记 (Ctrl+S)"; break;
+                default: break;
+                }
+                if (tipText) {
+                    wcsncpy_s(pDispInfo->szText, tipText, _TRUNCATE);
+                    pDispInfo->lpszText = pDispInfo->szText;
+                    pDispInfo->hinst = nullptr;
+                    return 0;
+                }
+            }
+        }
+
         if (pNmhdr && pNmhdr->idFrom == IDC_MAIN_TREEVIEW) {
-            if (pNmhdr->code == TVN_SELCHANGEDW) {
+            if (pNmhdr->code == NM_CUSTOMDRAW) {
+                auto* pTvCd = reinterpret_cast<NMTVCUSTOMDRAW*>(lParam);
+                switch (pTvCd->nmcd.dwDrawStage) {
+                case CDDS_PREPAINT:
+                    return CDRF_NOTIFYITEMDRAW;
+                case CDDS_ITEMPREPAINT: {
+                    HTREEITEM hItem = reinterpret_cast<HTREEITEM>(pTvCd->nmcd.dwItemSpec);
+                    bool isSelected = (pTvCd->nmcd.uItemState & CDIS_SELECTED) || (m_treeView.GetSelectedItem() == hItem);
+                    if (isSelected) {
+                        pTvCd->clrText = RGB(0, 102, 204);     // Fluent 现代选中深蓝
+                        pTvCd->clrTextBk = RGB(225, 238, 255); // 现代浅蓝柔和高亮底色
+                    } else {
+                        pTvCd->clrText = RGB(33, 37, 41);
+                        pTvCd->clrTextBk = RGB(247, 248, 250); // 侧边栏微灰底色
+                    }
+                    return CDRF_NEWFONT;
+                }
+                default:
+                    return CDRF_DODEFAULT;
+                }
+            } else if (pNmhdr->code == TVN_SELCHANGEDW) {
                 OnTreeSelectionChanged(reinterpret_cast<NMTREEVIEWW*>(lParam));
                 return 0;
             } else if (pNmhdr->code == TVN_BEGINDRAGW) {
@@ -891,6 +985,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                         return 1;
                     }
                 }
+            } else if (pNmhdr->code == TVN_BEGINLABELEDITW) {
+                auto* editInfo = reinterpret_cast<NMTVDISPINFOW*>(lParam);
+                m_treeView.PrepareLabelEdit(editInfo->item.hItem);
+                return FALSE;
             } else if (pNmhdr->code == TVN_ENDLABELEDITW) {
                 auto* pDispInfo = reinterpret_cast<NMTVDISPINFOW*>(lParam);
                 if (pDispInfo->item.pszText && wcslen(pDispInfo->item.pszText) > 0) {

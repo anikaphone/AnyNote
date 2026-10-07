@@ -1,6 +1,7 @@
 #include "FindReplaceDialog.h"
 #include "RichEditView.h"
 #include <commctrl.h>
+#include <uxtheme.h>
 #include <algorithm>
 
 namespace anynote::ui {
@@ -69,7 +70,7 @@ void FindReplaceDialog::RegisterClassIfNeeded(HINSTANCE hInstance) {
     wc.hInstance = hInstance;
     wc.lpszClassName = GetClassName();
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = (HBRUSH)GetStockObject(WHITE_BRUSH);
 
     RegisterClassExW(&wc);
     s_findDialogClassRegistered = true;
@@ -115,7 +116,8 @@ bool FindReplaceDialog::Initialize(HWND hParent) {
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
     );
 
-    m_hBgBrush = (HBRUSH)(COLOR_BTNFACE + 1);
+    // 纯白高雅底板，消除勾选框和单选框周围的灰色色块
+    m_hBgBrush = CreateSolidBrush(RGB(255, 255, 255));
 
     // 1. 顶部 TabControl 选项卡
     m_hTab = CreateWindowExW(
@@ -125,6 +127,7 @@ bool FindReplaceDialog::Initialize(HWND hParent) {
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_FRD_TAB)),
         GetModuleHandleW(nullptr), nullptr
     );
+    SetWindowTheme(m_hTab, L"Explorer", nullptr);
 
     TCITEMW tie = { TCIF_TEXT };
     wchar_t tab1[] = L"查找";
@@ -147,13 +150,14 @@ bool FindReplaceDialog::Initialize(HWND hParent) {
     );
 
     m_hEditFind = CreateWindowExW(
-        WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | WS_BORDER,
         0, 0, 10, 10, m_hWnd,
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_FRD_EDIT_FIND)),
         GetModuleHandleW(nullptr), nullptr
     );
     SetWindowSubclass(m_hEditFind, EditSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SendMessageW(m_hEditFind, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(6, 6));
 
     // 3. 替换为 (替换页专属)
     m_hLabelReplace = CreateWindowExW(
@@ -165,13 +169,14 @@ bool FindReplaceDialog::Initialize(HWND hParent) {
     );
 
     m_hEditReplace = CreateWindowExW(
-        WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
+        0, L"EDIT", L"",
+        WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | WS_BORDER,
         0, 0, 10, 10, m_hWnd,
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_FRD_EDIT_REPLACE)),
         GetModuleHandleW(nullptr), nullptr
     );
     SetWindowSubclass(m_hEditReplace, EditSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+    SendMessageW(m_hEditReplace, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(6, 6));
 
     // 4. 匹配选项复选框
     m_hChkMatchCase = CreateWindowExW(
@@ -332,18 +337,31 @@ void FindReplaceDialog::LayoutControls() {
     int tabH = MulDiv(28, dpi, 96);
     MoveWindow(m_hTab, padX, MulDiv(4, dpi, 96), clientW - padX * 2, tabH, TRUE);
 
-    // 左侧输入与选项区
-    int labelW = MulDiv(75, dpi, 96);
+    // 用控件实际字体测量标签，给快捷键文字和输入框之间保留间距。
+    HDC hdc = GetDC(m_hWnd);
+    HGDIOBJ oldFont = SelectObject(hdc, m_hFont);
+    RECT findLabelRect = {}, replaceLabelRect = {};
+    DrawTextW(hdc, L"查找目标(&F):", -1, &findLabelRect, DT_CALCRECT | DT_SINGLELINE);
+    DrawTextW(hdc, L"替换为(&E):", -1, &replaceLabelRect, DT_CALCRECT | DT_SINGLELINE);
+    SelectObject(hdc, oldFont);
+    ReleaseDC(m_hWnd, hdc);
+
+    int labelX = MulDiv(14, dpi, 96);
+    int gap = MulDiv(10, dpi, 96);
+    int labelW = std::max(findLabelRect.right, replaceLabelRect.right) + MulDiv(4, dpi, 96);
     int ctlH = MulDiv(23, dpi, 96);
-    int editW = MulDiv(230, dpi, 96);
+    int btnW = MulDiv(116, dpi, 96);
+    int btnX = clientW - btnW - MulDiv(12, dpi, 96);
+    int editX = labelX + labelW + gap;
+    int editW = std::max(1, btnX - gap - editX);
 
     int yFind = MulDiv(38, dpi, 96);
-    MoveWindow(m_hLabelFind, MulDiv(14, dpi, 96), yFind, labelW, ctlH, TRUE);
-    MoveWindow(m_hEditFind, MulDiv(90, dpi, 96), yFind, editW, ctlH, TRUE);
+    MoveWindow(m_hLabelFind, labelX, yFind, labelW, ctlH, TRUE);
+    MoveWindow(m_hEditFind, editX, yFind, editW, ctlH, TRUE);
 
     int yReplace = MulDiv(66, dpi, 96);
-    MoveWindow(m_hLabelReplace, MulDiv(14, dpi, 96), yReplace, labelW, ctlH, TRUE);
-    MoveWindow(m_hEditReplace, MulDiv(90, dpi, 96), yReplace, editW, ctlH, TRUE);
+    MoveWindow(m_hLabelReplace, labelX, yReplace, labelW, ctlH, TRUE);
+    MoveWindow(m_hEditReplace, editX, yReplace, editW, ctlH, TRUE);
 
     // 复选框选项
     int optY = MulDiv(96, dpi, 96);
@@ -366,9 +384,7 @@ void FindReplaceDialog::LayoutControls() {
     MoveWindow(m_hStatus, MulDiv(14, dpi, 96), statusY, MulDiv(306, dpi, 96), MulDiv(22, dpi, 96), TRUE);
 
     // 右侧按钮列
-    int btnW = MulDiv(116, dpi, 96);
     int btnH = MulDiv(25, dpi, 96);
-    int btnX = clientW - btnW - MulDiv(12, dpi, 96);
 
     int btnY1 = MulDiv(37, dpi, 96);
     int btnY2 = MulDiv(67, dpi, 96);
@@ -635,6 +651,10 @@ LRESULT FindReplaceDialog::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam
         }
         break;
     }
+
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORBTN:
+        return reinterpret_cast<LRESULT>(m_hBgBrush);
 
     case WM_CTLCOLORSTATIC: {
         HDC hdcStatic = reinterpret_cast<HDC>(wParam);

@@ -61,6 +61,7 @@ target_link_libraries(AnyNote PRIVATE
     ole32
     uxtheme
     shlwapi
+    gdiplus
 )
 
 # 采用静态 C/C++ 运行时 (/MT)，生成零第三方依赖的单一便携式可执行文件

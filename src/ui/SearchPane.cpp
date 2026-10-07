@@ -94,13 +94,14 @@ bool SearchPane::Initialize(HWND hParent, storage::NoteRepository* repo) {
 
     // 2. 输入框
     m_hEdit = CreateWindowExW(
-        WS_EX_CLIENTEDGE, L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+        0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | WS_BORDER,
         0, 0, 10, 10, m_hWnd,
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_SP_EDIT)),
         GetModuleHandleW(nullptr), nullptr
     );
     SetWindowSubclass(m_hEdit, EditSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    SendMessageW(m_hEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(6, 6));
 
     // 3. 搜索按钮
     m_hBtnSearch = CreateWindowExW(
@@ -148,9 +149,9 @@ bool SearchPane::Initialize(HWND hParent, storage::NoteRepository* repo) {
         GetModuleHandleW(nullptr), nullptr
     );
 
-    // 8. 结果列表 ListView
+    // 8. 结果列表 ListView (移除 WS_EX_CLIENTEDGE，移除 LVS_EX_GRIDLINES)
     m_hListResults = CreateWindowExW(
-        WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+        0, WC_LISTVIEWW, L"",
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
         0, 0, 10, 10, m_hWnd,
         reinterpret_cast<HMENU>(static_cast<UINT_PTR>(IDC_SP_LIST_RESULTS)),
@@ -158,7 +159,10 @@ bool SearchPane::Initialize(HWND hParent, storage::NoteRepository* repo) {
     );
 
     SetWindowTheme(m_hListResults, L"Explorer", nullptr);
-    ListView_SetExtendedListViewStyle(m_hListResults, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
+    ListView_SetExtendedListViewStyle(m_hListResults, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    ListView_SetBkColor(m_hListResults, RGB(255, 255, 255));
+    ListView_SetTextBkColor(m_hListResults, RGB(255, 255, 255));
+    ListView_SetTextColor(m_hListResults, RGB(33, 37, 41));
 
     // 初始化列
     LVCOLUMNW lvc = {};
@@ -324,6 +328,23 @@ LRESULT SearchPane::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         int width = LOWORD(lParam);
         int height = HIWORD(lParam);
         LayoutControls(width, height);
+        return 0;
+    }
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(m_hWnd, &ps);
+        RECT rc;
+        GetClientRect(m_hWnd, &rc);
+        FillRect(hdc, &rc, m_hBgBrush);
+
+        // 顶部 1px 精细分界线，衔接上方编辑器
+        HBRUSH hLine = CreateSolidBrush(RGB(226, 230, 234));
+        RECT lineRc = { rc.left, rc.top, rc.right, rc.top + 1 };
+        FillRect(hdc, &lineRc, hLine);
+        DeleteObject(hLine);
+
+        EndPaint(m_hWnd, &ps);
         return 0;
     }
 

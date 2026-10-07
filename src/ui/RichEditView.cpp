@@ -182,6 +182,22 @@ void RichEditView::ApplyDefaultFormatting(bool allDocument) {
 void RichEditView::SetBounds(int x, int y, int width, int height, bool repaint) {
     if (m_hWnd) {
         MoveWindow(m_hWnd, x, y, width, height, repaint ? TRUE : FALSE);
+
+        // 现代笔记文档呼吸感边距：左右留白 28px、顶部留白 18px (随 DPI 缩放)
+        UINT dpi = GetDpiForWindow(m_hWnd);
+        int marginX = MulDiv(28, dpi, 96);
+        int topMargin = MulDiv(18, dpi, 96);
+        int bottomMargin = MulDiv(20, dpi, 96);
+
+        SendMessageW(m_hWnd, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELONG(marginX, marginX));
+
+        RECT rc;
+        GetClientRect(m_hWnd, &rc);
+        rc.left += marginX;
+        rc.top += topMargin;
+        rc.right = std::max(rc.left + 50, rc.right - marginX);
+        rc.bottom = std::max(rc.top + 50, rc.bottom - bottomMargin);
+        SendMessageW(m_hWnd, EM_SETRECTNP, 0, reinterpret_cast<LPARAM>(&rc));
     }
 }
 

@@ -67,6 +67,7 @@ LRESULT Splitter::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
         m_isDragging = true;
         SetCapture(m_hWnd);
+        InvalidateRect(m_hWnd, nullptr, FALSE);
         return 0;
 
     case WM_MOUSEMOVE:
@@ -89,6 +90,7 @@ LRESULT Splitter::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         if (m_isDragging) {
             m_isDragging = false;
             ReleaseCapture();
+            InvalidateRect(m_hWnd, nullptr, FALSE);
         }
         return 0;
 
@@ -97,7 +99,25 @@ LRESULT Splitter::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         HDC hdc = BeginPaint(m_hWnd, &ps);
         RECT rc;
         GetClientRect(m_hWnd, &rc);
-        FillRect(hdc, &rc, m_hBgBrush);
+
+        // 现代极简分割条：与侧边栏无缝底色 + 1px 精细中性分界线 (拖动时品牌蓝高光)
+        COLORREF bgNormal = m_isHorizontal ? RGB(248, 249, 250) : RGB(247, 248, 250);
+        COLORREF lineColor = m_isDragging ? RGB(0, 120, 215) : RGB(226, 230, 234);
+
+        HBRUSH hBrushBg = CreateSolidBrush(bgNormal);
+        FillRect(hdc, &rc, hBrushBg);
+        DeleteObject(hBrushBg);
+
+        HBRUSH hBrushLine = CreateSolidBrush(lineColor);
+        if (m_isHorizontal) {
+            RECT lineRc = { rc.left, rc.top, rc.right, rc.top + 1 };
+            FillRect(hdc, &lineRc, hBrushLine);
+        } else {
+            RECT lineRc = { rc.right - 1, rc.top, rc.right, rc.bottom };
+            FillRect(hdc, &lineRc, hBrushLine);
+        }
+        DeleteObject(hBrushLine);
+
         EndPaint(m_hWnd, &ps);
         return 0;
     }

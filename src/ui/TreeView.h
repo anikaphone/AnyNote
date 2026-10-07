@@ -25,6 +25,7 @@ public:
 
     std::wstring GetItemText(HTREEITEM hItem) const;
     void SetItemText(HTREEITEM hItem, const std::wstring& text);
+    void PrepareLabelEdit(HTREEITEM hItem);
 
     LPARAM GetItemData(HTREEITEM hItem) const;
     void SetItemData(HTREEITEM hItem, LPARAM data);
@@ -45,6 +46,9 @@ public:
 private:
     HWND m_hWnd = nullptr;
     HFONT m_hFont = nullptr;
+    HTREEITEM m_editItem = nullptr;
+    static LRESULT CALLBACK LabelEditSubclassProc(HWND hWnd, UINT message, WPARAM wParam,
+        LPARAM lParam, UINT_PTR subclassId, DWORD_PTR referenceData);
 };
 
 } // namespace anynote::ui
