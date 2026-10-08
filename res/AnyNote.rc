@@ -36,6 +36,8 @@ BEGIN
 
     POPUP "搜索(&S)"
     BEGIN
+        MENUITEM "搜索节点(&P)...\tCtrl+P",       ID_TREE_SEARCH
+        MENUITEM SEPARATOR
         MENUITEM "查找(&F)...\tCtrl+F",           ID_EDIT_FIND
         MENUITEM "替换(&R)...\tCtrl+H",           ID_EDIT_REPLACE
         MENUITEM "标记(&M)...\tCtrl+M",           ID_EDIT_MARK
@@ -108,6 +110,7 @@ BEGIN
     VK_F3, ID_EDIT_FIND_NEXT,   VIRTKEY
     VK_F3, ID_EDIT_FIND_PREV,   VIRTKEY, SHIFT
     "F", ID_SEARCH_GLOBAL,      VIRTKEY, CONTROL, SHIFT
+    "P", ID_TREE_SEARCH,        VIRTKEY, CONTROL
 END
 
 // 插入代码块对话框

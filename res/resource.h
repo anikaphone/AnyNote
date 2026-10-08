@@ -26,6 +26,7 @@
 #define ID_FILE_MANAGE_VAULTS   1009
 #define ID_TREE_EXPAND_ALL      1020
 #define ID_TREE_COLLAPSE_ALL    1021
+#define ID_TREE_SEARCH          1022
 
 // Edit Commands
 #define ID_EDIT_UNDO            1101
@@ -95,6 +96,12 @@
 #define IDC_MAIN_SPLITTER_H     2008
 #define IDC_TOOLBAR_HEADING_COMBO 2010
 #define IDC_MAIN_VAULT_BAR      2011
+#define IDC_MAIN_NODE_SEARCH_BAR 2012
+
+// Node Search Child IDs
+#define IDC_NODE_SEARCH_EDIT    3301
+#define IDC_NODE_SEARCH_COUNT   3302
+#define IDC_NODE_SEARCH_CLOSE   3303
 
 // Code Block Dialog IDs
 #define IDC_CODE_LANG           2101

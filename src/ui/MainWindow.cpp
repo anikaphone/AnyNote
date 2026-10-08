@@ -14,11 +14,35 @@
 #include <iomanip>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace anynote::ui {
 
 namespace {
+
+std::wstring TrimWhitespace(std::wstring_view s) {
+    size_t start = 0;
+    while (start < s.size() && iswspace(s[start])) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && iswspace(s[end - 1])) {
+        --end;
+    }
+    return std::wstring(s.substr(start, end - start));
+}
+
+bool FuzzySubsequenceMatch(std::wstring_view pattern, std::wstring_view text) {
+    if (pattern.empty()) return true;
+    size_t p = 0;
+    for (wchar_t tc : text) {
+        if (towlower(tc) == towlower(pattern[p])) {
+            if (++p == pattern.size()) return true;
+        }
+    }
+    return false;
+}
 
 std::wstring GetDefaultNotebookPath() {
     wchar_t exePath[MAX_PATH] = {0};
@@ -729,8 +753,8 @@ LRESULT CALLBACK VaultBarSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARA
 
 static bool s_mainClassRegistered = false;
 
-MainWindow::MainWindow()
-    : m_findReplaceDialog(m_richEditView) {
+MainWindow::MainWindow(const std::wstring& iniPath)
+    : m_vaultManager(iniPath), m_findReplaceDialog(m_richEditView) {
 }
 
 void MainWindow::RegisterClassIfNeeded(HINSTANCE hInstance) {
@@ -909,6 +933,38 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         SetFocus(m_richEditView.GetHwnd());
     });
 
+    // 7.1 初始化左侧目录树底部搜索栏
+    m_nodeSearchBar.Initialize(m_hWnd);
+    m_nodeSearchBar.SetOnFilterChanged([this](const std::wstring& keyword) {
+        FilterTreeNodes(keyword);
+    });
+    m_nodeSearchBar.SetOnEnterPressed([this]() {
+        if (m_treeView.GetHwnd()) {
+            SetFocus(m_treeView.GetHwnd());
+            HTREEITEM hSel = m_treeView.GetSelectedItem();
+            if (!hSel) {
+                hSel = TreeView_GetRoot(m_treeView.GetHwnd());
+                if (hSel) {
+                    m_treeView.SelectItem(hSel);
+                }
+            }
+            if (hSel) {
+                m_treeView.EnsureVisible(hSel);
+                int64_t nodeId = static_cast<int64_t>(m_treeView.GetItemData(hSel));
+                if (nodeId > 0 && nodeId != m_activeNoteId) {
+                    if (SaveActiveNote()) {
+                        m_activeNoteId = nodeId;
+                        LoadNoteForId(nodeId);
+                        UpdateStatusBar(L"当前笔记: " + m_treeView.GetItemText(hSel));
+                    }
+                }
+            }
+        }
+    });
+    m_nodeSearchBar.SetOnClose([this]() {
+        ShowNodeSearch(false);
+    });
+
     // 8. 加载多库配置并打开活动库 (若失效则优雅回退；仅当首次无任何库时填充欢迎笔记)
     m_vaultManager.Load();
     m_lastCodeLanguage = LoadLastCodeLanguage();
@@ -950,8 +1006,9 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
     int toolbarH = m_toolbar.GetPreferredHeight();
     int statusbarH = MulDiv(21, dpi, 96);
     int vaultBarH = MulDiv(30, dpi, 96);
+    int searchBarH = m_isNodeSearchVisible ? MulDiv(34, dpi, 96) : 0;
     int workH = std::max(100, clientHeight - toolbarH - statusbarH);
-    int treeH = std::max(40, workH - vaultBarH);
+    int treeH = std::max(40, workH - vaultBarH - searchBarH);
 
     m_toolbar.SetBounds(0, 0, clientWidth, toolbarH);
 
@@ -961,6 +1018,14 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
         SetWindowPos(m_hVaultBar, nullptr, 0, toolbarH, m_splitterPos, vaultBarH, SWP_NOZORDER | SWP_NOACTIVATE);
     }
     m_treeView.SetBounds(0, toolbarH + vaultBarH, m_splitterPos, treeH);
+
+    if (m_isNodeSearchVisible) {
+        m_nodeSearchBar.SetBounds(0, toolbarH + vaultBarH + treeH, m_splitterPos, searchBarH);
+        ShowWindow(m_nodeSearchBar.GetHwnd(), SW_SHOW);
+    } else {
+        ShowWindow(m_nodeSearchBar.GetHwnd(), SW_HIDE);
+    }
+
     m_splitter.SetBounds(m_splitterPos, toolbarH, 5, workH);
 
     int editorX = m_splitterPos + 5;
@@ -1104,6 +1169,9 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     m_repo = std::move(newRepo);
     m_searchPane.SetRepository(m_repo.get());
     m_currentNotebookPath = filePath;
+    // The previous note was saved before opening the new vault. Its node ID
+    // must not be used by selection notifications from rebuilding the new tree.
+    m_activeNoteId = 0;
 
     // 更新窗口标题 (优先显示库的友好名称或文件名)
     std::wstring displayName = m_vaultManager.GetActiveVaultDisplayName();
@@ -1115,6 +1183,15 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
 
     UpdateEncryptionStatusUI();
     PopulateTreeViewFromDb();
+    // Reapply the node filter after rebuilding the tree for a different vault.
+    // The search bar belongs to the main window and keeps its query while the
+    // notebook contents are replaced.
+    if (m_isNodeSearchVisible) {
+        const std::wstring keyword = m_nodeSearchBar.GetKeyword();
+        if (!TrimWhitespace(keyword).empty()) {
+            FilterTreeNodes(keyword);
+        }
+    }
     UpdateVaultBarUI();
 
     return true;
@@ -1237,6 +1314,7 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
 void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
     if (!pNmtv) return;
     if (m_revertingTreeSelection) return;
+    if (m_isFilteringTree) return;
 
     if (!pNmtv->itemNew.hItem) {
         if (m_richEditView.GetHwnd()) {
@@ -1530,6 +1608,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 OnTreeSelectionChanged(reinterpret_cast<NMTREEVIEWW*>(lParam));
                 return 0;
             } else if (pNmhdr->code == TVN_BEGINDRAGW) {
+                if (m_isNodeSearchVisible && !m_nodeSearchBar.GetKeyword().empty()) {
+                    return 0; // 过滤搜索状态下禁止拖拽重排
+                }
                 auto* pNmtv = reinterpret_cast<NMTREEVIEWW*>(lParam);
                 if (pNmtv && pNmtv->itemNew.hItem) {
                     m_hDragItem = pNmtv->itemNew.hItem;
@@ -1552,10 +1633,16 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             } else if (pNmhdr->code == TVN_KEYDOWN) {
                 auto* pTvKey = reinterpret_cast<NMTVKEYDOWN*>(lParam);
-                if (pTvKey->wVKey == VK_ESCAPE && m_isDragging) {
-                    // 拖拽期间焦点仍在 TreeView，Escape 通过 TVN_KEYDOWN 到达父窗口。
-                    CancelDragOperation();
-                    return 1;
+                if (pTvKey->wVKey == VK_ESCAPE) {
+                    if (m_isDragging) {
+                        // 拖拽期间焦点仍在 TreeView，Escape 通过 TVN_KEYDOWN 到达父窗口。
+                        CancelDragOperation();
+                        return 1;
+                    }
+                    if (m_isNodeSearchVisible) {
+                        ShowNodeSearch(false);
+                        return 1;
+                    }
                 }
                 if (pTvKey->wVKey == VK_DELETE) {
                     // 仅当焦点在左侧树控件且未在就地编辑文本时响应 Del 删除笔记
@@ -1721,7 +1808,15 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
 
         // 搜索、替换、标记相关命令
+        case ID_TREE_SEARCH:
+            ShowNodeSearch(true);
+            return 0;
+
         case ID_EDIT_FIND:
+            if (GetFocus() == m_treeView.GetHwnd() || (m_isNodeSearchVisible && GetFocus() == m_nodeSearchBar.GetHwnd())) {
+                ShowNodeSearch(true);
+                return 0;
+            }
             OpenFindReplaceDialog(FindTabMode::Find);
             return 0;
         case ID_EDIT_REPLACE:
@@ -1998,7 +2093,17 @@ void MainWindow::ToggleSearchPane() {
 }
 
 void MainWindow::OnSearchResultSelected(const storage::SearchResult& result) {
-    SelectNodeById(result.nodeId);
+    if (!SelectNodeById(result.nodeId)) {
+        // A global result may be hidden by the node filter. Preserve the query
+        // for visible results; clear it only when restoring the tree is needed.
+        if (!m_isNodeSearchVisible || TrimWhitespace(m_nodeSearchBar.GetKeyword()).empty()) return;
+        if (!SaveActiveNote()) return;
+        ShowNodeSearch(false);
+        if (!SelectNodeById(result.nodeId)) return;
+    }
+    // Selection can be rejected when saving the previous note fails. Never
+    // apply a search highlight to that previous note.
+    if (m_activeNoteId != result.nodeId) return;
 
     if (!result.matchInTitle) {
         std::wstring kw = m_searchPane.GetSearchKeyword();
@@ -2050,6 +2155,8 @@ void MainWindow::ShowTreeContextMenu(int xScreen, int yScreen) {
         AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_NOTE, L"新建笔记(&N)\tCtrl+N");
         AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_SUB_NOTE, L"新建子笔记(&S)\tCtrl+Shift+N");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_SEARCH, L"搜索节点(&F)...\tCtrl+P");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, ID_FILE_RENAME_NOTE, L"重命名(&R)\tF2");
         AppendMenuW(hMenu, MF_STRING, ID_FILE_DELETE_NOTE, L"删除(&D)\tDel");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
@@ -2057,6 +2164,8 @@ void MainWindow::ShowTreeContextMenu(int xScreen, int yScreen) {
         AppendMenuW(hMenu, MF_STRING, ID_TREE_COLLAPSE_ALL, L"全部折叠(&C)");
     } else {
         AppendMenuW(hMenu, MF_STRING, ID_FILE_NEW_NOTE, L"新建根笔记(&N)\tCtrl+N");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(hMenu, MF_STRING, ID_TREE_SEARCH, L"搜索节点(&F)...\tCtrl+P");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, ID_TREE_EXPAND_ALL, L"全部展开(&E)");
         AppendMenuW(hMenu, MF_STRING, ID_TREE_COLLAPSE_ALL, L"全部折叠(&C)");
@@ -2287,6 +2396,186 @@ bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
     }
     m_vaultManager.SetActiveVaultPath(previousActivePath);
     return false;
+}
+
+void MainWindow::ShowNodeSearch(bool show) {
+    if (m_isNodeSearchVisible == show) {
+        if (show) {
+            m_nodeSearchBar.FocusSearchBox();
+        }
+        return;
+    }
+
+    m_isNodeSearchVisible = show;
+    m_nodeSearchBar.ShowBar(show);
+
+    RECT rc;
+    GetClientRect(m_hWnd, &rc);
+    LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
+
+    if (show) {
+        m_nodeSearchBar.FocusSearchBox();
+        std::wstring kw = m_nodeSearchBar.GetKeyword();
+        if (!kw.empty()) {
+            FilterTreeNodes(kw);
+        }
+    } else {
+        m_nodeSearchBar.ClearKeyword();
+        PopulateTreeViewFromDb(m_activeNoteId);
+        if (m_treeView.GetHwnd()) {
+            SetFocus(m_treeView.GetHwnd());
+        }
+    }
+}
+
+void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
+    if (!m_repo || !m_treeView.GetHwnd()) return;
+
+    std::wstring trimmed = TrimWhitespace(keyword);
+    if (trimmed.empty()) {
+        m_nodeSearchBar.SetMatchCount(0, false);
+        PopulateTreeViewFromDb(m_activeNoteId);
+        return;
+    }
+
+    auto allNodes = m_repo->GetAllNodes();
+    if (allNodes.empty()) {
+        m_nodeSearchBar.SetMatchCount(0, true);
+        m_treeView.ClearAll();
+        return;
+    }
+
+    // 1. 建立节点父子关系查找表
+    std::unordered_map<int64_t, std::vector<int64_t>> childrenMap;
+    std::unordered_map<int64_t, const storage::NoteNode*> nodeMap;
+    for (const auto& node : allNodes) {
+        nodeMap[node.id] = &node;
+        childrenMap[node.parentId].push_back(node.id);
+    }
+
+    // 2. 智能子序列模糊匹配直接命中项
+    std::unordered_set<int64_t> directMatches;
+    for (const auto& node : allNodes) {
+        if (FuzzySubsequenceMatch(trimmed, node.title)) {
+            directMatches.insert(node.id);
+        }
+    }
+
+    int matchCount = static_cast<int>(directMatches.size());
+    m_nodeSearchBar.SetMatchCount(matchCount, true);
+
+    if (directMatches.empty()) {
+        // 无匹配：清空树视图
+        HWND hTree = m_treeView.GetHwnd();
+        SendMessageW(hTree, WM_SETREDRAW, FALSE, 0);
+        m_isFilteringTree = true;
+        m_treeView.ClearAll();
+        m_isFilteringTree = false;
+        SendMessageW(hTree, WM_SETREDRAW, TRUE, 0);
+        InvalidateRect(hTree, nullptr, TRUE);
+        return;
+    }
+
+    // 3. 收集所有需展示的节点集合：
+    // - 直接命中节点
+    // - 父节点命中时，递归展示其所有下级子孙节点
+    // - 子节点命中时，追溯保留其所有祖先节点（保证路径完整）
+    std::unordered_set<int64_t> visibleIds;
+    std::function<void(int64_t)> addDescendants = [&](int64_t parentId) {
+        auto it = childrenMap.find(parentId);
+        if (it != childrenMap.end()) {
+            for (int64_t childId : it->second) {
+                visibleIds.insert(childId);
+                addDescendants(childId);
+            }
+        }
+    };
+
+    for (int64_t matchedId : directMatches) {
+        visibleIds.insert(matchedId);
+        addDescendants(matchedId);
+
+        // 向上追溯祖先
+        int64_t currId = matchedId;
+        while (true) {
+            auto it = nodeMap.find(currId);
+            if (it == nodeMap.end() || it->second->parentId == 0) break;
+            currId = it->second->parentId;
+            visibleIds.insert(currId);
+        }
+    }
+
+    // 4. 重建过滤树视图（关闭重绘以消除闪烁）
+    HWND hTree = m_treeView.GetHwnd();
+    SendMessageW(hTree, WM_SETREDRAW, FALSE, 0);
+    m_isFilteringTree = true;
+    m_treeView.ClearAll();
+
+    std::unordered_map<int64_t, HTREEITEM> idToItem;
+    std::vector<storage::NoteNode> remaining;
+    for (const auto& node : allNodes) {
+        if (visibleIds.count(node.id)) {
+            remaining.push_back(node);
+        }
+    }
+
+    bool insertedAny = true;
+    while (!remaining.empty() && insertedAny) {
+        insertedAny = false;
+        std::vector<storage::NoteNode> nextRemaining;
+        for (auto& node : remaining) {
+            if (node.parentId == 0 || visibleIds.count(node.parentId) == 0) {
+                HTREEITEM hItem = m_treeView.InsertNode(nullptr, node.title, static_cast<LPARAM>(node.id), true);
+                idToItem[node.id] = hItem;
+                insertedAny = true;
+            } else {
+                auto it = idToItem.find(node.parentId);
+                if (it != idToItem.end()) {
+                    HTREEITEM hItem = m_treeView.InsertNode(it->second, node.title, static_cast<LPARAM>(node.id), true);
+                    idToItem[node.id] = hItem;
+                    insertedAny = true;
+                } else {
+                    nextRemaining.push_back(std::move(node));
+                }
+            }
+        }
+        remaining = std::move(nextRemaining);
+    }
+
+    // 孤儿节点兜底
+    for (const auto& orphan : remaining) {
+        HTREEITEM hItem = m_treeView.InsertNode(nullptr, orphan.title, static_cast<LPARAM>(orphan.id), true);
+        idToItem[orphan.id] = hItem;
+    }
+
+    // 展开所有过滤节点的分支
+    m_treeView.ExpandAll(true);
+
+    // 选中项处理：优先保留当前笔记；若不在结果中，则高亮第一个直接命中项
+    HTREEITEM hToSelect = nullptr;
+    if (m_activeNoteId > 0 && idToItem.count(m_activeNoteId)) {
+        hToSelect = idToItem[m_activeNoteId];
+    } else {
+        for (const auto& node : allNodes) {
+            if (directMatches.count(node.id) && idToItem.count(node.id)) {
+                hToSelect = idToItem[node.id];
+                break;
+            }
+        }
+    }
+
+    if (!hToSelect) {
+        hToSelect = TreeView_GetRoot(hTree);
+    }
+
+    if (hToSelect) {
+        TreeView_Select(hTree, hToSelect, TVGN_CARET);
+        m_treeView.EnsureVisible(hToSelect);
+    }
+
+    m_isFilteringTree = false;
+    SendMessageW(hTree, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(hTree, nullptr, TRUE);
 }
 
 } // namespace anynote::ui

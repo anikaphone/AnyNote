@@ -7,6 +7,7 @@
 #include "ui/RichEditView.h"
 #include "ui/FindReplaceDialog.h"
 #include "ui/SearchPane.h"
+#include "ui/NodeSearchBar.h"
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
 #include "storage/VaultManager.h"
@@ -17,7 +18,7 @@ namespace anynote::ui {
 
 class MainWindow : public common::Window {
 public:
-    MainWindow();
+    explicit MainWindow(const std::wstring& iniPath = L"");
     ~MainWindow() override = default;
 
     bool Initialize(HINSTANCE hInstance, int nCmdShow);
@@ -57,6 +58,10 @@ private:
     void ShowTreeContextMenu(int xScreen, int yScreen);
     void ShowEditorContextMenu(int xScreen, int yScreen);
 
+    // 目录树搜索相关操作
+    void ShowNodeSearch(bool show);
+    void FilterTreeNodes(const std::wstring& keyword);
+
     // 多笔记本库相关操作
     void UpdateVaultBarUI();
     void OnNewVault();
@@ -72,6 +77,7 @@ private:
     RichEditView m_richEditView;
     FindReplaceDialog m_findReplaceDialog;
     SearchPane m_searchPane;
+    NodeSearchBar m_nodeSearchBar;
     Splitter m_searchSplitter;
     HWND m_hStatusBar = nullptr;
 
@@ -91,6 +97,8 @@ private:
     int m_splitterPos = 260; // 默认左侧分割条 X 坐标
     int m_searchPaneHeight = 180; // 默认下方全库搜索窗格高度
     bool m_isSearchPaneVisible = false; // 全库搜索窗格是否显示
+    bool m_isNodeSearchVisible = false; // 目录树节点搜索栏是否显示
+    bool m_isFilteringTree = false;     // 是否正在执行树节点过滤
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
 };

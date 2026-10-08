@@ -317,6 +317,42 @@ int main() {
         assert(rtfPy.find("{\\v [lang:Python]\\v0}") != std::string::npos);
     }
 
-    std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION, MULTI-VAULT, INI CONFIG AND CODEBLOCK TESTS PASSED SUCCESSFULLY!" << std::endl;
+    // 14. 验证树节点智能子序列模糊匹配算法 (Fuzzy Subsequence Matching)
+    std::cout << "[TEST] 14. Testing smart subsequence fuzzy matching for node search..." << std::endl;
+    {
+        auto FuzzySubsequenceMatch = [](std::wstring_view pattern, std::wstring_view text) -> bool {
+            if (pattern.empty()) return true;
+            size_t p = 0;
+            for (wchar_t tc : text) {
+                if (towlower(tc) == towlower(pattern[p])) {
+                    if (++p == pattern.size()) return true;
+                }
+            }
+            return false;
+        };
+
+        // 基础子序列与连续匹配测试
+        assert(FuzzySubsequenceMatch(L"note", L"AnyNote"));
+        assert(FuzzySubsequenceMatch(L"NOTE", L"AnyNote"));
+        assert(FuzzySubsequenceMatch(L"js", L"JavaScript"));
+        assert(FuzzySubsequenceMatch(L"JS", L"JavaScript"));
+        assert(FuzzySubsequenceMatch(L"开发", L"💻 开发与技术积累"));
+        assert(FuzzySubsequenceMatch(L"技累", L"💻 开发与技术积累"));
+        assert(FuzzySubsequenceMatch(L"安全", L"🔒 SQLite3MC 数据库与安全"));
+        assert(FuzzySubsequenceMatch(L"c++", L"📘 现代 C++ 与 Win32 架构"));
+
+        // 负例测试
+        assert(!FuzzySubsequenceMatch(L"xyz", L"AnyNote"));
+        assert(!FuzzySubsequenceMatch(L"sj", L"JavaScript")); // 顺序颠倒不可匹配
+        assert(!FuzzySubsequenceMatch(L"java1", L"JavaScript"));
+
+        // 边界测试
+        assert(FuzzySubsequenceMatch(L"", L"AnyNote")); // 空关键词匹配所有
+        assert(FuzzySubsequenceMatch(L"", L""));
+        assert(!FuzzySubsequenceMatch(L"a", L""));
+    }
+
+    std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION, MULTI-VAULT, INI CONFIG, CODEBLOCK AND NODE SEARCH TESTS PASSED SUCCESSFULLY!" << std::endl;
     return 0;
 }
+

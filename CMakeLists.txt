@@ -37,6 +37,8 @@ set(SOURCES
     src/ui/FindReplaceDialog.h
     src/ui/SearchPane.cpp
     src/ui/SearchPane.h
+    src/ui/NodeSearchBar.cpp
+    src/ui/NodeSearchBar.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/storage/Database.cpp
@@ -107,6 +109,18 @@ add_executable(test_codeblock_hover
 target_include_directories(test_codeblock_hover PRIVATE src res)
 target_link_libraries(test_codeblock_hover PRIVATE comctl32 ole32 gdiplus)
 set_property(TARGET test_codeblock_hover PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+# Exercise tree filtering and global navigation through the real window handlers.
+set(NODE_SEARCH_TEST_SOURCES ${SOURCES})
+list(REMOVE_ITEM NODE_SEARCH_TEST_SOURCES src/main.cpp)
+add_executable(test_node_search tests/test_node_search.cpp ${NODE_SEARCH_TEST_SOURCES})
+target_include_directories(test_node_search PRIVATE src res)
+target_link_libraries(test_node_search PRIVATE
+    sqlite3mc::sqlite3mc_static comctl32 ole32 uxtheme shlwapi gdiplus
+)
+set_property(TARGET test_node_search PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
