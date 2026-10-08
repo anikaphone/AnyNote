@@ -273,4 +273,31 @@ bool VaultManager::RenameVault(size_t index, const std::wstring& newName) {
     return true;
 }
 
+std::wstring VaultManager::GetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& defaultValue) const {
+    if (!std::filesystem::exists(m_iniPath)) {
+        return defaultValue;
+    }
+    wchar_t buf[256] = {0};
+    GetPrivateProfileStringW(
+        section.c_str(),
+        key.c_str(),
+        defaultValue.c_str(),
+        buf,
+        static_cast<DWORD>(std::size(buf)),
+        m_iniPath.c_str()
+    );
+    return buf;
+}
+
+bool VaultManager::SetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& value) {
+    EnsureIniFileExists();
+    BOOL ok = WritePrivateProfileStringW(
+        section.c_str(),
+        key.c_str(),
+        value.c_str(),
+        m_iniPath.c_str()
+    );
+    return (ok != FALSE);
+}
+
 } // namespace anynote::storage

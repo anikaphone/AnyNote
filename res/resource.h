@@ -69,6 +69,11 @@
 #define ID_TABLE_DELETE_COL        1315
 #define ID_TABLE_DELETE_TABLE      1316
 
+// Code Block Commands
+#define ID_CODEBLOCK_COPY          1320
+#define ID_CODE_LANG_BASE          1330
+#define ID_CODE_LANG_MAX           1340
+
 // Security Commands
 #define ID_SECURITY_ENCRYPT     1401
 

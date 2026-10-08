@@ -19,6 +19,54 @@ const std::vector<LanguageInfo>& GetSupportedLanguages() {
     return s_languages;
 }
 
+const wchar_t* CodeLanguageToString(CodeLanguage lang) {
+    switch (lang) {
+    case CodeLanguage::Cpp:        return L"Cpp";
+    case CodeLanguage::Python:     return L"Python";
+    case CodeLanguage::JavaScript: return L"JavaScript";
+    case CodeLanguage::Sql:        return L"Sql";
+    case CodeLanguage::Shell:      return L"Shell";
+    case CodeLanguage::Html:       return L"Html";
+    case CodeLanguage::PlainText:
+    default:                       return L"PlainText";
+    }
+}
+
+CodeLanguage StringToCodeLanguage(std::wstring_view str) {
+    if (_wcsicmp(std::wstring(str).c_str(), L"Cpp") == 0 || _wcsicmp(std::wstring(str).c_str(), L"C++") == 0) {
+        return CodeLanguage::Cpp;
+    }
+    if (_wcsicmp(std::wstring(str).c_str(), L"Python") == 0) {
+        return CodeLanguage::Python;
+    }
+    if (_wcsicmp(std::wstring(str).c_str(), L"JavaScript") == 0 || _wcsicmp(std::wstring(str).c_str(), L"TypeScript") == 0 || _wcsicmp(std::wstring(str).c_str(), L"JS") == 0) {
+        return CodeLanguage::JavaScript;
+    }
+    if (_wcsicmp(std::wstring(str).c_str(), L"Sql") == 0) {
+        return CodeLanguage::Sql;
+    }
+    if (_wcsicmp(std::wstring(str).c_str(), L"Shell") == 0 || _wcsicmp(std::wstring(str).c_str(), L"Bash") == 0) {
+        return CodeLanguage::Shell;
+    }
+    if (_wcsicmp(std::wstring(str).c_str(), L"Html") == 0 || _wcsicmp(std::wstring(str).c_str(), L"Xml") == 0) {
+        return CodeLanguage::Html;
+    }
+    return CodeLanguage::PlainText;
+}
+
+const wchar_t* GetLanguageShortName(CodeLanguage lang) {
+    switch (lang) {
+    case CodeLanguage::Cpp:        return L"C / C++";
+    case CodeLanguage::Python:     return L"Python";
+    case CodeLanguage::JavaScript: return L"JavaScript";
+    case CodeLanguage::Sql:        return L"SQL";
+    case CodeLanguage::Shell:      return L"Shell";
+    case CodeLanguage::Html:       return L"HTML";
+    case CodeLanguage::PlainText:
+    default:                       return L"纯文本";
+    }
+}
+
 namespace {
 
 enum class TokenType {
@@ -257,7 +305,7 @@ void AppendEscapedRtf(std::string& rtf, const std::wstring& text) {
         } else if (wc == L'\r') {
             // 忽略 \r
         } else if (wc == L'\n') {
-            rtf += "\\par\n";
+            rtf += "\\par\\intbl\\sl240\\slmult1\\sb40\\sa40\\f1\\fs19\\cf3 ";
         } else if (wc < 128) {
             rtf += static_cast<char>(wc);
         } else {
@@ -284,28 +332,36 @@ std::string SyntaxHighlighter::GenerateRtfCodeBlock(std::wstring_view code, Code
     // \cf10 : 左侧重音装饰条品蓝 (RGB 3, 102, 214)
 
     std::string rtf;
-    rtf.reserve(4096);
+    rtf.reserve(4096 + code.size() * 3);
 
     rtf += "{\\rtf1\\ansi\\deff0\\nouicompat";
     rtf += "{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}{\\f1\\fnil\\fcharset0 Consolas;}}";
     rtf += "{\\colortbl ;\\red246\\green248\\blue250;\\red225\\green228\\blue232;\\red36\\green41\\blue47;\\red0\\green92\\blue197;\\red215\\green58\\blue73;\\red3\\green47\\blue98;\\red106\\green115\\blue125;\\red0\\green92\\blue197;\\red111\\green66\\blue193;\\red3\\green102\\blue214;}";
-    rtf += "\\viewkind4\\uc1";
-    rtf += "\\par\n";
+    rtf += "\\viewkind4\\uc1\n";
 
-    // 单行单单元格代码卡片
-    // 左外边距 360 twips，单元格宽度 8600 twips
-    // 上下右细边框 (15 twips, cf2)，左侧重音高亮粗条 (40 twips, cf10)
-    rtf += "\\trowd\\trgaph108\\trleft360";
+    // 单行单单元格纯净代码卡片 (设置最小行高 720 twips 避免单行卡片过于扁平)
+    rtf += "\\trowd\\trgaph108\\trleft360\\trrh720";
     rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
     rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
     rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
     rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
     rtf += "\\clcbpat1\\cellx8600\n";
 
-    // 卡片内段落：表格内 (\intbl)、单倍紧凑行距 (\sl240\slmult1)、Consolas (\f1)、9.5pt (\fs19)
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
+    // 单元格内首部嵌入不可见的语言元数据标记 (\\v 为 RTF 隐藏文本，屏幕占用 0 像素)
+    const wchar_t* langCode = CodeLanguageToString(lang);
+    std::wstring langTag = L"[lang:" + std::wstring(langCode) + L"]";
 
-    auto tokens = Tokenize(code, lang);
+    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb60\\sa60\\f1\\fs19\\cf3 ";
+    rtf += "{\\v ";
+    AppendEscapedRtf(rtf, langTag);
+    rtf += "\\v0}";
+
+    std::wstring_view effectiveCode = code;
+    if (effectiveCode.empty()) {
+        effectiveCode = L"\n\n";
+    }
+
+    auto tokens = Tokenize(effectiveCode, lang);
     for (const auto& token : tokens) {
         int colorIndex = 3; // 默认深炭灰
         switch (token.type) {
@@ -322,9 +378,8 @@ std::string SyntaxHighlighter::GenerateRtfCodeBlock(std::wstring_view code, Code
         AppendEscapedRtf(rtf, token.text);
     }
 
-    // 闭合单元格并恢复段落样式
+    // 闭合单元格并闭合行
     rtf += "\\cell\\row\n";
-    rtf += "\\pard\\f0\\fs22\\par\n";
     rtf += "}";
 
     return rtf;

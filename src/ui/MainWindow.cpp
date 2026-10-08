@@ -911,6 +911,7 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
 
     // 8. 加载多库配置并打开活动库 (若失效则优雅回退；仅当首次无任何库时填充欢迎笔记)
     m_vaultManager.Load();
+    m_lastCodeLanguage = LoadLastCodeLanguage();
     bool shouldAddWelcomeNotes = m_vaultManager.IsFirstTimeCreation();
     std::wstring activePath = m_vaultManager.GetActiveVaultPath();
     if (!std::filesystem::exists(activePath)) {
@@ -1007,20 +1008,51 @@ void MainWindow::UpdateEncryptionStatusUI() {
     }
 }
 
+common::CodeLanguage MainWindow::LoadLastCodeLanguage() {
+    std::wstring str = m_vaultManager.GetConfigString(L"Editor", L"LastCodeLanguage", L"PlainText");
+    return common::StringToCodeLanguage(str);
+}
+
+void MainWindow::SaveLastCodeLanguage(common::CodeLanguage lang) {
+    m_vaultManager.SetConfigString(L"Editor", L"LastCodeLanguage", common::CodeLanguageToString(lang));
+}
+
+void MainWindow::OnInsertCodeBlock() {
+    std::wstring sel = m_richEditView.GetSelectedText();
+    common::CodeLanguage lang = m_lastCodeLanguage;
+    if (sel.empty()) {
+        m_richEditView.InsertCodeBlock(L"\n\n", lang);
+    } else {
+        m_richEditView.InsertCodeBlock(sel, lang);
+    }
+    UpdateStatusBar(L"已插入代码卡片");
+}
+
 void MainWindow::ShowInsertCodeDialog() {
-    CodeDialogContext ctx;
-    ctx.initialCode = m_richEditView.GetSelectedText();
+    OnInsertCodeBlock();
+}
 
-    INT_PTR res = DialogBoxParamW(
-        GetModuleHandleW(nullptr),
-        MAKEINTRESOURCEW(IDD_INSERT_CODE),
-        m_hWnd,
-        CodeDialogProc,
-        reinterpret_cast<LPARAM>(&ctx)
-    );
+void MainWindow::OnInsertImageFromFile() {
+    wchar_t szFile[MAX_PATH] = { 0 };
+    OPENFILENAMEW ofn = { sizeof(OPENFILENAMEW) };
+    ofn.hwndOwner = m_hWnd;
+    ofn.lpstrFilter =
+        L"所有支持的图片 (*.png;*.jpg;*.jpeg;*.bmp;*.gif)\0*.png;*.jpg;*.jpeg;*.bmp;*.gif\0"
+        L"PNG 图片 (*.png)\0*.png\0"
+        L"JPEG 图片 (*.jpg;*.jpeg)\0*.jpg;*.jpeg\0"
+        L"位图文件 (*.bmp)\0*.bmp\0"
+        L"所有文件 (*.*)\0*.*\0";
+    ofn.lpstrFile = szFile;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrTitle = L"选择要插入的图片";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
 
-    if (res == IDOK && ctx.ok) {
-        m_richEditView.InsertCodeBlock(ctx.resultText, ctx.selectedLang);
+    if (GetOpenFileNameW(&ofn)) {
+        if (m_richEditView.InsertImageFromFile(szFile)) {
+            UpdateStatusBar(L"已插入图片");
+        } else {
+            MessageBoxW(m_hWnd, L"插入图片失败，请检查文件是否存在且格式有效。", L"插入图片", MB_OK | MB_ICONWARNING);
+        }
     }
 }
 
@@ -1559,6 +1591,24 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         break;
     }
 
+    case WM_CODEBLOCK_COPIED:
+        UpdateStatusBar(L"已复制代码到剪贴板 ✔");
+        return 0;
+
+    case WM_CODEBLOCK_LANG_CHANGED: {
+        m_lastCodeLanguage = static_cast<common::CodeLanguage>(wParam);
+        SaveLastCodeLanguage(m_lastCodeLanguage);
+        const auto& langs = common::GetSupportedLanguages();
+        for (const auto& l : langs) {
+            if (l.lang == m_lastCodeLanguage) {
+                UpdateStatusBar(std::wstring(L"已切换代码语言为: ") + l.name);
+                break;
+            }
+        }
+        PostMessageW(m_hWnd, WM_EDITOR_FORMAT_CHANGED, 0, 0);
+        return 0;
+    }
+
     case WM_COMMAND: {
         WORD cmdId = LOWORD(wParam);
         if (cmdId >= ID_VAULT_SWITCH_BASE && cmdId <= ID_VAULT_SWITCH_MAX) {
@@ -1566,6 +1616,29 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             const auto* vault = m_vaultManager.GetVault(idx);
             if (vault) {
                 SwitchToVault(vault->path);
+            }
+            return 0;
+        }
+
+        if (cmdId >= ID_CODE_LANG_BASE && cmdId < ID_CODE_LANG_BASE + static_cast<WORD>(common::GetSupportedLanguages().size())) {
+            size_t idx = static_cast<size_t>(cmdId - ID_CODE_LANG_BASE);
+            common::CodeLanguage newLang = common::GetSupportedLanguages()[idx].lang;
+            CodeBlockInfo info;
+            if (m_richEditView.GetCodeBlockAtCursor(&info)) {
+                m_richEditView.SwitchCodeBlockLanguage(info, newLang);
+            }
+            m_lastCodeLanguage = newLang;
+            SaveLastCodeLanguage(m_lastCodeLanguage);
+            UpdateStatusBar(std::wstring(L"已切换代码语言为: ") + common::GetSupportedLanguages()[idx].name);
+            PostMessageW(m_hWnd, WM_EDITOR_FORMAT_CHANGED, 0, 0);
+            return 0;
+        }
+
+        if (cmdId == ID_CODEBLOCK_COPY) {
+            CodeBlockInfo info;
+            if (m_richEditView.GetCodeBlockAtCursor(&info)) {
+                m_richEditView.CopyCodeBlockText(info);
+                UpdateStatusBar(L"已复制代码到剪贴板 ✔");
             }
             return 0;
         }
@@ -1618,7 +1691,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             m_richEditView.ToggleStrike();
             return 0;
         case ID_FORMAT_CODE_BLOCK:
-            ShowInsertCodeDialog();
+            OnInsertCodeBlock();
             return 0;
         case ID_FORMAT_BULLET_LIST:
             m_richEditView.InsertBulletList();
@@ -1711,14 +1784,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             m_richEditView.DeleteTable();
             return 0;
 
-        // 插入图片演示提示
+        // 插入图片
         case ID_INSERT_IMAGE:
-            MessageBoxW(
-                m_hWnd,
-                L"💡 提示：Win32 RichEdit 原生支持图片剪贴板粘贴！\r\n\r\n你可以使用 Win+Shift+S 截图，然后在右侧编辑器中直接按 Ctrl+V 粘贴任意图片。",
-                L"插入图片说明",
-                MB_OK | MB_ICONINFORMATION
-            );
+            OnInsertImageFromFile();
             return 0;
 
         // 树节点增删
@@ -2055,26 +2123,45 @@ void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
     AppendMenuW(hSubFormat, MF_STRING, ID_FORMAT_HEADING_4, L"标题 4(&4)\tCtrl+4");
     AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubFormat), L"格式(&O)");
 
-    // 4. 插入与表格
-    bool inTable = m_richEditView.IsCursorInTable();
-    if (inTable) {
-        HMENU hSubTable = CreatePopupMenu();
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_ABOVE, L"在上方插入行(&A)");
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_BELOW, L"在下方插入行(&B)");
-        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_LEFT, L"在左侧插入列(&L)");
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_RIGHT, L"在右侧插入列(&R)");
-        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_ROW, L"删除当前行(&R)");
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_COL, L"删除当前列(&C)");
-        AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_TABLE, L"删除表格(&T)");
-        AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubTable), L"表格(&B)");
+    // 4. 代码块或表格操作
+    CodeBlockInfo cbInfo;
+    bool inCodeBlock = m_richEditView.GetCodeBlockAtCursor(&cbInfo);
+    if (inCodeBlock) {
+        AppendMenuW(hMenu, MF_STRING, ID_CODEBLOCK_COPY, L"📋 复制代码块\tCtrl+C");
+        HMENU hLangSub = CreatePopupMenu();
+        const auto& languages = common::GetSupportedLanguages();
+        for (size_t i = 0; i < languages.size(); ++i) {
+            UINT flags = MF_STRING;
+            if (languages[i].lang == cbInfo.currentLang) {
+                flags |= MF_CHECKED;
+            }
+            AppendMenuW(hLangSub, flags, ID_CODE_LANG_BASE + i, languages[i].name);
+        }
+        AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hLangSub), L"⚙ 切换代码语言");
+        AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     } else {
-        AppendMenuW(hMenu, MF_STRING, ID_INSERT_TABLE, L"插入表格(3×2)(&T)\tCtrl+Shift+T");
+        bool inTable = m_richEditView.IsCursorInTable();
+        if (inTable) {
+            HMENU hSubTable = CreatePopupMenu();
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_ABOVE, L"在上方插入行(&A)");
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_ROW_BELOW, L"在下方插入行(&B)");
+            AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_LEFT, L"在左侧插入列(&L)");
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_INSERT_COL_RIGHT, L"在右侧插入列(&R)");
+            AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_ROW, L"删除当前行(&R)");
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_COL, L"删除当前列(&C)");
+            AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+            AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_TABLE, L"删除表格(&T)");
+            AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubTable), L"表格(&B)");
+        } else {
+            AppendMenuW(hMenu, MF_STRING, ID_INSERT_TABLE, L"插入表格(3×2)(&T)\tCtrl+Shift+T");
+        }
+
+        AppendMenuW(hMenu, MF_STRING, ID_FORMAT_CODE_BLOCK, L"插入代码块(&K)\tCtrl+K");
     }
 
-    AppendMenuW(hMenu, MF_STRING, ID_FORMAT_CODE_BLOCK, L"插入代码块(&K)...\tCtrl+K");
+    AppendMenuW(hMenu, MF_STRING, ID_INSERT_IMAGE, L"插入图片(&P)...");
     AppendMenuW(hMenu, MF_STRING, ID_INSERT_DATETIME, L"插入当前时间戳(&D)");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, ID_EDIT_FIND, L"在当前笔记中查找(&F)...\tCtrl+F");

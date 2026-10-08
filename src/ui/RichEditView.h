@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/SyntaxHighlighter.h"
+#include "ui/CodeBlockHoverBar.h"
 #include <windows.h>
 #include <richedit.h>
 #include <string>
@@ -10,6 +11,18 @@
 namespace anynote::ui {
 
 inline constexpr UINT WM_EDITOR_FORMAT_CHANGED = WM_APP + 20;
+inline constexpr UINT WM_CODEBLOCK_COPIED = WM_APP + 25;
+inline constexpr UINT WM_CODEBLOCK_LANG_CHANGED = WM_APP + 26;
+
+struct CodeBlockInfo {
+    bool isCodeBlock = false;
+    long tableStart = 0;
+    long tableEnd = 0;
+    long codeStart = 0;
+    long codeEnd = 0;
+    common::CodeLanguage currentLang = common::CodeLanguage::PlainText;
+    std::wstring codeText;
+};
 
 class RichEditView {
 public:
@@ -45,8 +58,24 @@ public:
     void InsertBulletList();
     void InsertNumberedList();
 
+    // 本地图片插入 (支持 PNG/JPG/BMP/GIF/WEBP 等，自适应宽度等比高清缩放)
+    bool InsertImageFromFile(const std::wstring& filePath);
+
     // 核心特色：插入美化且带语法高亮的代码框 (CodeBox)
-    bool InsertCodeBlock(std::wstring_view codeContent = L"", common::CodeLanguage lang = common::CodeLanguage::Cpp);
+    bool InsertCodeBlock(std::wstring_view codeContent = L"", common::CodeLanguage lang = common::CodeLanguage::PlainText);
+
+    // 代码卡片交互支持 (顶栏复制、切换语言、光标检测)
+    bool GetCodeBlockAtCursor(CodeBlockInfo* outInfo = nullptr) const;
+    bool GetCodeBlockAt(long charPos, CodeBlockInfo* outInfo = nullptr) const;
+    bool CopyCodeBlockText(const CodeBlockInfo& info) const;
+    bool SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::CodeLanguage newLang);
+
+    // 悬浮条与光标/鼠标交互
+    void OnMouseMove(long charPos, POINT ptClient);
+    void OnMouseLeave();
+    void OnSelChange();
+    void UpdateHoverBarPosition();
+    RECT GetCodeBlockRect(const CodeBlockInfo& info) const;
 
     // 表格操作 (插入 3*2 表格、行列调整、删除、单元格导航)
     bool InsertTable(int rows = 2, int cols = 3);
@@ -80,6 +109,7 @@ public:
 private:
     HWND m_hWnd = nullptr;
     HMODULE m_richEditModule = nullptr;
+    CodeBlockHoverBar m_hoverBar;
     std::vector<CHARRANGE> m_markedRanges;
     std::vector<CHARFORMAT2W> m_markedFormats;
 

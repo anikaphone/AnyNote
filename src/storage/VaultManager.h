@@ -55,6 +55,10 @@ public:
     const std::wstring& GetExeDir() const noexcept { return m_exeDir; }
     bool IsFirstTimeCreation() const noexcept { return m_isFirstTimeCreation; }
 
+    // INI 配置通用读取与写入
+    std::wstring GetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& defaultValue = L"") const;
+    bool SetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& value);
+
 private:
     void EnsureIniFileExists();
     static std::wstring SanitizeFileName(const std::wstring& name);

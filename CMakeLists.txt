@@ -29,6 +29,8 @@ set(SOURCES
     src/ui/TreeView.h
     src/ui/RichEditView.cpp
     src/ui/RichEditView.h
+    src/ui/CodeBlockHoverBar.cpp
+    src/ui/CodeBlockHoverBar.h
     src/ui/Toolbar.cpp
     src/ui/Toolbar.h
     src/ui/FindReplaceDialog.cpp
@@ -81,6 +83,8 @@ add_executable(test_storage
     src/storage/NoteModel.h
     src/storage/NoteRepository.cpp
     src/storage/NoteRepository.h
+    src/common/SyntaxHighlighter.cpp
+    src/common/SyntaxHighlighter.h
 )
 target_include_directories(test_storage PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -92,4 +96,18 @@ target_link_libraries(test_storage PRIVATE
 set_property(TARGET test_storage PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
+
+# Native editor regression test; uses a scratch window without opening any vault.
+add_executable(test_codeblock_hover
+    tests/test_codeblock_hover.cpp
+    src/ui/RichEditView.cpp
+    src/ui/CodeBlockHoverBar.cpp
+    src/common/SyntaxHighlighter.cpp
+)
+target_include_directories(test_codeblock_hover PRIVATE src res)
+target_link_libraries(test_codeblock_hover PRIVATE comctl32 ole32 gdiplus)
+set_property(TARGET test_codeblock_hover PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
 

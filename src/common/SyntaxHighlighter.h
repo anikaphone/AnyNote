@@ -24,6 +24,10 @@ struct LanguageInfo {
 
 const std::vector<LanguageInfo>& GetSupportedLanguages();
 
+const wchar_t* CodeLanguageToString(CodeLanguage lang);
+CodeLanguage StringToCodeLanguage(std::wstring_view str);
+const wchar_t* GetLanguageShortName(CodeLanguage lang);
+
 class SyntaxHighlighter {
 public:
     static std::string GenerateRtfCodeBlock(std::wstring_view code, CodeLanguage lang);

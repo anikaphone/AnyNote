@@ -1,6 +1,7 @@
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
 #include "storage/VaultManager.h"
+#include "common/SyntaxHighlighter.h"
 #include <iostream>
 #ifdef NDEBUG
 #undef NDEBUG
@@ -272,6 +273,15 @@ int main() {
         assert(lifeIdx >= 0);
         assert(reloadMgr.GetVault(static_cast<size_t>(lifeIdx))->name == L"个人随想");
 
+        // 验证通用 INI 配置读取与持久化 (LastCodeLanguage 等)
+        assert(reloadMgr.GetConfigString(L"Editor", L"LastCodeLanguage", L"PlainText") == L"PlainText");
+        assert(reloadMgr.SetConfigString(L"Editor", L"LastCodeLanguage", L"Python"));
+        assert(reloadMgr.GetConfigString(L"Editor", L"LastCodeLanguage", L"PlainText") == L"Python");
+
+        // 重新加载测试配置是否已写入磁盘
+        VaultManager reloadedConfigMgr(iniPath);
+        assert(reloadedConfigMgr.GetConfigString(L"Editor", L"LastCodeLanguage", L"PlainText") == L"Python");
+
         // 移除测试库
         assert(reloadMgr.RemoveVault(static_cast<size_t>(lifeIdx)));
         assert(reloadMgr.GetVaultCount() == countBeforeReload - 1);
@@ -280,6 +290,33 @@ int main() {
     }
     std::filesystem::remove_all(vaultTestDir, vaultTestEc);
 
-    std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION AND MULTI-VAULT TESTS PASSED SUCCESSFULLY!" << std::endl;
+    // 13. 验证代码块 RTF 生成纯净性 (绝不能在代码块前后插入任何多余的 \par 空白行)
+    std::cout << "[TEST] 13. Testing RTF CodeBlock purity (no stray blank lines before or after)..." << std::endl;
+    {
+        using namespace anynote::common;
+        std::string rtfCpp = SyntaxHighlighter::GenerateRtfCodeBlock(L"int x = 42;\nreturn x;", CodeLanguage::Cpp);
+        
+        // 验证代码块前绝无多余 \par
+        assert(rtfCpp.find("\\par\n\\trowd") == std::string::npos);
+        assert(rtfCpp.find("\\par\r\n\\trowd") == std::string::npos);
+        assert(rtfCpp.find("\\viewkind4\\uc1\n\\trowd") != std::string::npos);
+
+        // 验证代码块后绝无多余 \par
+        assert(rtfCpp.find("\\cell\\row\n}") != std::string::npos);
+        assert(rtfCpp.find("\\cell\\row\n\\pard\\f0\\fs22\\par\n}") == std::string::npos);
+
+        // 验证语言元数据标签正确嵌入隐藏标记
+        assert(rtfCpp.find("{\\v [lang:Cpp]\\v0}") != std::string::npos);
+
+        // 验证换行符在表格单元格内正确携带 \\intbl 属性
+        assert(rtfCpp.find("\\par\\intbl") != std::string::npos);
+
+        // 切换语言生成的 RTF 同样结构纯净
+        std::string rtfPy = SyntaxHighlighter::GenerateRtfCodeBlock(L"x = 42\nprint(x)", CodeLanguage::Python);
+        assert(rtfPy.find("\\par\n\\trowd") == std::string::npos);
+        assert(rtfPy.find("{\\v [lang:Python]\\v0}") != std::string::npos);
+    }
+
+    std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION, MULTI-VAULT, INI CONFIG AND CODEBLOCK TESTS PASSED SUCCESSFULLY!" << std::endl;
     return 0;
 }

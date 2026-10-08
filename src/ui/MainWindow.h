@@ -37,6 +37,11 @@ private:
     void UpdateStatusBar(const std::wstring& text);
     void OnTreeSelectionChanged(NMTREEVIEWW* pNmtv);
     void ShowInsertCodeDialog();
+    void OnInsertCodeBlock();
+    void OnInsertImageFromFile();
+
+    common::CodeLanguage LoadLastCodeLanguage();
+    void SaveLastCodeLanguage(common::CodeLanguage lang);
 
     bool OpenNotebook(const std::wstring& filePath, const std::string& password = "", bool createWelcomeIfEmpty = false);
     void PopulateTreeViewFromDb(int64_t selectNodeId = 0);
@@ -86,6 +91,8 @@ private:
     int m_splitterPos = 260; // 默认左侧分割条 X 坐标
     int m_searchPaneHeight = 180; // 默认下方全库搜索窗格高度
     bool m_isSearchPaneVisible = false; // 全库搜索窗格是否显示
+
+    common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
 };
 
 } // namespace anynote::ui

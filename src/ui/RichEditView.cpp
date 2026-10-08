@@ -1,14 +1,37 @@
 #include "RichEditView.h"
+#include "resource.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <windowsx.h>
 #include <cwctype>
 #include <vector>
+#include <memory>
+#include <filesystem>
+#include <gdiplus.h>
 #include <tom.h>
 
 namespace anynote::ui {
 
 namespace {
+
+int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
+    UINT num = 0;
+    UINT size = 0;
+    Gdiplus::GetImageEncodersSize(&num, &size);
+    if (size == 0) return -1;
+
+    std::vector<BYTE> buffer(size);
+    auto* pImageCodecInfo = reinterpret_cast<Gdiplus::ImageCodecInfo*>(buffer.data());
+    Gdiplus::GetImageEncoders(num, size, pImageCodecInfo);
+
+    for (UINT j = 0; j < num; ++j) {
+        if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0) {
+            *pClsid = pImageCodecInfo[j].Clsid;
+            return static_cast<int>(j);
+        }
+    }
+    return -1;
+}
 
 struct StreamInCookie {
     const char* data;
@@ -99,8 +122,35 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
         SendMessageW(GetParent(hWnd), WM_CONTEXTMENU, reinterpret_cast<WPARAM>(hWnd), lParam);
         return 0;
     }
+    if (uMsg == WM_MOUSEMOVE && pThis) {
+        POINT ptClient = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        POINTL ptl = { ptClient.x, ptClient.y };
+        LRESULT charPos = SendMessageW(hWnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl));
+        pThis->OnMouseMove(static_cast<long>(charPos), ptClient);
+
+        TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT) };
+        tme.dwFlags = TME_LEAVE;
+        tme.hwndTrack = hWnd;
+        TrackMouseEvent(&tme);
+    }
+
+    if (uMsg == WM_MOUSELEAVE && pThis) {
+        pThis->OnMouseLeave();
+    }
+
+    const bool shouldUpdateHoverBar = pThis &&
+        (uMsg == WM_VSCROLL || uMsg == WM_HSCROLL || uMsg == WM_MOUSEWHEEL || uMsg == WM_SIZE);
     LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    if (shouldUpdateHoverBar) {
+        pThis->UpdateHoverBarPosition();
+    }
     switch (uMsg) {
+    case WM_KEYUP:
+    case WM_LBUTTONUP:
+        if (pThis) {
+            pThis->OnSelChange();
+        }
+        break;
     case WM_CHAR:
     case WM_KEYDOWN:
     case WM_SETTEXT:
@@ -145,7 +195,7 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
 
     DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_VSCROLL | WS_HSCROLL |
                     ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_NOHIDESEL | ES_WANTRETURN |
-                    WS_CLIPSIBLINGS;
+                    WS_CLIPSIBLINGS | WS_CLIPCHILDREN;
 
     m_hWnd = CreateWindowExW(
         0,
@@ -177,6 +227,24 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
 
     // 默认开启高级 RTF 语言选项
     SendMessageW(m_hWnd, EM_SETLANGOPTIONS, 0, 0);
+
+    // 初始化单例代码块悬浮控制条
+    m_hoverBar.Initialize(m_hWnd);
+    m_hoverBar.SetOnLanguageChanged([this](common::CodeLanguage newLang) {
+        CodeBlockInfo info;
+        long activeTable = m_hoverBar.GetActiveTableStart();
+        if (activeTable >= 0 && GetCodeBlockAt(activeTable, &info)) {
+            SwitchCodeBlockLanguage(info, newLang);
+        }
+    });
+    m_hoverBar.SetOnCopyClicked([this]() {
+        CodeBlockInfo info;
+        long activeTable = m_hoverBar.GetActiveTableStart();
+        if (activeTable >= 0 && GetCodeBlockAt(activeTable, &info)) {
+            CopyCodeBlockText(info);
+            SendMessageW(GetParent(m_hWnd), WM_CODEBLOCK_COPIED, 0, 0);
+        }
+    });
 
     ApplyDefaultFormatting(true);
     return true;
@@ -226,6 +294,7 @@ void RichEditView::SetBounds(int x, int y, int width, int height, bool repaint) 
 
 void RichEditView::SetText(const std::wstring& text) {
     if (!m_hWnd) return;
+    m_hoverBar.Hide();
     SetWindowTextW(m_hWnd, text.c_str());
 }
 
@@ -265,6 +334,7 @@ std::wstring RichEditView::GetSelectedText() const {
 bool RichEditView::StreamInRTF(std::string_view rtfData) {
     if (!m_hWnd || rtfData.empty()) return false;
 
+    m_hoverBar.Hide();
     StreamInCookie cookie{rtfData.data(), rtfData.size()};
     EDITSTREAM es = {};
     es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
@@ -501,14 +571,533 @@ void RichEditView::InsertNumberedList() {
     SendMessageW(m_hWnd, EM_SETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&pf));
 }
 
+bool RichEditView::InsertImageFromFile(const std::wstring& filePath) {
+    if (!m_hWnd) return false;
+    if (!std::filesystem::exists(filePath)) return false;
+
+    std::unique_ptr<Gdiplus::Bitmap> pBmp(Gdiplus::Bitmap::FromFile(filePath.c_str()));
+    if (!pBmp || pBmp->GetLastStatus() != Gdiplus::Ok) {
+        return false;
+    }
+
+    UINT origW = pBmp->GetWidth();
+    UINT origH = pBmp->GetHeight();
+    if (origW == 0 || origH == 0) return false;
+
+    RECT rcClient;
+    GetClientRect(m_hWnd, &rcClient);
+    UINT dpi = GetDpiForWindow(m_hWnd);
+    if (dpi == 0) dpi = 96;
+
+    int marginX = MulDiv(28, dpi, 96);
+    int maxDispW = (rcClient.right - rcClient.left) - marginX * 2 - MulDiv(30, dpi, 96);
+    if (maxDispW < MulDiv(200, dpi, 96)) {
+        maxDispW = MulDiv(650, dpi, 96);
+    }
+
+    UINT targetW = origW;
+    UINT targetH = origH;
+    if (targetW > static_cast<UINT>(maxDispW)) {
+        targetH = static_cast<UINT>((static_cast<uint64_t>(origH) * maxDispW) / origW);
+        targetW = static_cast<UINT>(maxDispW);
+        if (targetH == 0) targetH = 1;
+    }
+
+    UINT picwgoal = (targetW * 1440) / dpi;
+    UINT pichgoal = (targetH * 1440) / dpi;
+
+    IStream* pStream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &pStream))) {
+        return false;
+    }
+
+    CLSID clsidPng = {};
+    if (GetEncoderClsid(L"image/png", &clsidPng) < 0) {
+        clsidPng = { 0x557cf406, 0x1a04, 0x11d3, { 0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e } };
+    }
+
+    Gdiplus::Status st = pBmp->Save(pStream, &clsidPng, nullptr);
+    if (st != Gdiplus::Ok) {
+        pStream->Release();
+        return false;
+    }
+
+    STATSTG stat;
+    if (FAILED(pStream->Stat(&stat, STATFLAG_NONAME))) {
+        pStream->Release();
+        return false;
+    }
+
+    ULONG sizeInBytes = static_cast<ULONG>(stat.cbSize.QuadPart);
+    std::vector<BYTE> buffer(sizeInBytes);
+    LARGE_INTEGER liZero = {};
+    pStream->Seek(liZero, STREAM_SEEK_SET, nullptr);
+    ULONG readBytes = 0;
+    pStream->Read(buffer.data(), sizeInBytes, &readBytes);
+    pStream->Release();
+
+    if (readBytes == 0) return false;
+
+    std::string hexData;
+    hexData.reserve(readBytes * 2 + (readBytes / 64) + 64);
+    static const char hexDigits[] = "0123456789abcdef";
+    for (ULONG i = 0; i < readBytes; ++i) {
+        BYTE b = buffer[i];
+        hexData.push_back(hexDigits[(b >> 4) & 0x0F]);
+        hexData.push_back(hexDigits[b & 0x0F]);
+        if ((i + 1) % 64 == 0) {
+            hexData.push_back('\n');
+        }
+    }
+
+    std::string rtf = "{\\rtf1\\ansi\\deff0{\\pict\\pngblip\\picw";
+    rtf += std::to_string(origW);
+    rtf += "\\pich";
+    rtf += std::to_string(origH);
+    rtf += "\\picwgoal";
+    rtf += std::to_string(picwgoal);
+    rtf += "\\pichgoal";
+    rtf += std::to_string(pichgoal);
+    rtf += "\n";
+    rtf += hexData;
+    rtf += "}\\par\n}";
+
+    bool ok = StreamInSelectionRTF(rtf);
+    if (!ok) {
+        HBITMAP hBmp = nullptr;
+        if (pBmp->GetHBITMAP(Gdiplus::Color::White, &hBmp) == Gdiplus::Ok && hBmp) {
+            bool clipboardOwnsBitmap = false;
+            if (OpenClipboard(m_hWnd)) {
+                EmptyClipboard();
+                clipboardOwnsBitmap = SetClipboardData(CF_BITMAP, hBmp) != nullptr;
+                CloseClipboard();
+                if (clipboardOwnsBitmap) {
+                    SendMessageW(m_hWnd, WM_PASTE, 0, 0);
+                    ok = true;
+                }
+            }
+            if (!clipboardOwnsBitmap) {
+                DeleteObject(hBmp);
+            }
+        }
+    }
+
+    ApplyDefaultFormatting(false);
+    PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
+    return ok;
+}
+
 bool RichEditView::InsertCodeBlock(std::wstring_view codeContent, common::CodeLanguage lang) {
     if (!m_hWnd) return false;
 
-    std::string rtf = common::SyntaxHighlighter::GenerateRtfCodeBlock(codeContent, lang);
+    CHARRANGE crBefore = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&crBefore));
+
+    std::wstring effectiveContent(codeContent);
+    if (effectiveContent.empty()) {
+        effectiveContent = L"\n\n";
+    }
+
+    std::string rtf = common::SyntaxHighlighter::GenerateRtfCodeBlock(effectiveContent, lang);
     bool ok = StreamInSelectionRTF(rtf);
 
+    if (ok) {
+        CodeBlockInfo info;
+        if (GetCodeBlockAt(crBefore.cpMin, &info) ||
+            GetCodeBlockAt(crBefore.cpMin + 1, &info) ||
+            GetCodeBlockAt(crBefore.cpMin + 2, &info)) {
+            CHARRANGE crTarget = { info.codeStart, info.codeStart };
+            SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crTarget));
+            RECT rcBlock = GetCodeBlockRect(info);
+            m_hoverBar.AttachToCodeBlock(info, rcBlock);
+        }
+    }
+
     ApplyDefaultFormatting(false);
+    PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
     return ok;
+}
+
+bool RichEditView::GetCodeBlockAtCursor(CodeBlockInfo* outInfo) const {
+    if (!m_hWnd) return false;
+    CHARRANGE cr = {};
+    SendMessageW(m_hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    return GetCodeBlockAt(cr.cpMin, outInfo);
+}
+
+bool RichEditView::GetCodeBlockAt(long charPos, CodeBlockInfo* outInfo) const {
+    if (!m_hWnd) return false;
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (!pUnk) return false;
+
+    ITextDocument2* pDoc2 = nullptr;
+    bool found = false;
+    if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        ITextRange2* pRange = nullptr;
+        if (SUCCEEDED(pDoc2->Range2(charPos, charPos, &pRange))) {
+            long delta = 0;
+            if (SUCCEEDED(pRange->Expand(tomTable, &delta)) && delta > 0) {
+                long tStart = 0, tEnd = 0;
+                pRange->GetStart(&tStart);
+                pRange->GetEnd(&tEnd);
+
+                BSTR bstr = nullptr;
+                pRange->GetText(&bstr);
+                if (bstr) {
+                    std::wstring tableText = bstr;
+                    SysFreeString(bstr);
+
+                    // Adjacent code blocks can be returned as one TOM table range
+                    // when no paragraph separates their RTF. Narrow the range to
+                    // the row containing the requested character before parsing or
+                    // editing it.
+                    const long relativePos = std::clamp(charPos - tStart, 0L,
+                        static_cast<long>(tableText.size()));
+                    long rowStartOffset = relativePos;
+                    while (rowStartOffset > 0 &&
+                           tableText[static_cast<size_t>(rowStartOffset)] != static_cast<wchar_t>(0xfff9)) {
+                        --rowStartOffset;
+                    }
+                    long rowEndOffset = relativePos;
+                    while (rowEndOffset < static_cast<long>(tableText.size()) &&
+                           tableText[static_cast<size_t>(rowEndOffset)] != static_cast<wchar_t>(0xfffb)) {
+                        ++rowEndOffset;
+                    }
+                    if (rowStartOffset < rowEndOffset &&
+                        tableText[static_cast<size_t>(rowStartOffset)] == static_cast<wchar_t>(0xfff9)) {
+                        const long rowEndExclusive = std::min(
+                            static_cast<long>(tableText.size()), rowEndOffset + 1);
+                        tStart += rowStartOffset;
+                        tEnd = tStart + (rowEndExclusive - rowStartOffset);
+                        tableText = tableText.substr(
+                            static_cast<size_t>(rowStartOffset),
+                            static_cast<size_t>(rowEndExclusive - rowStartOffset));
+                    }
+
+                    // 1. 优先检测现代无污染单单元格代码块标记 [lang:<tag>]
+                    size_t tagPos = tableText.find(L"[lang:");
+                    if (tagPos != std::wstring::npos) {
+                        size_t tagEnd = tableText.find(L']', tagPos);
+                        if (tagEnd != std::wstring::npos) {
+                            found = true;
+                            if (outInfo) {
+                                outInfo->isCodeBlock = true;
+                                outInfo->tableStart = tStart;
+                                outInfo->tableEnd = tEnd;
+
+                                std::wstring langTag = tableText.substr(tagPos + 6, tagEnd - (tagPos + 6));
+                                outInfo->currentLang = common::StringToCodeLanguage(langTag);
+
+                                size_t codeStartIdx = tagEnd + 1;
+                                outInfo->codeStart = tStart + static_cast<long>(codeStartIdx);
+
+                                size_t codeEndIdx = tableText.rfind(static_cast<wchar_t>(0x07));
+                                if (codeEndIdx == std::wstring::npos || codeEndIdx <= codeStartIdx) {
+                                    codeEndIdx = tableText.rfind(static_cast<wchar_t>(0xfffb));
+                                }
+                                if (codeEndIdx == std::wstring::npos || codeEndIdx <= codeStartIdx) {
+                                    codeEndIdx = tableText.size();
+                                }
+                                outInfo->codeEnd = tStart + static_cast<long>(codeEndIdx);
+
+                                std::wstring rawCode = tableText.substr(codeStartIdx, codeEndIdx - codeStartIdx);
+                                std::wstring cleanCode;
+                                cleanCode.reserve(rawCode.size());
+                                for (size_t i = 0; i < rawCode.size(); ++i) {
+                                    if (rawCode[i] == L'\r') {
+                                        cleanCode += L"\r\n";
+                                        if (i + 1 < rawCode.size() && rawCode[i + 1] == L'\n') {
+                                            i++;
+                                        }
+                                    } else if (rawCode[i] != static_cast<wchar_t>(0x07) &&
+                                               rawCode[i] != static_cast<wchar_t>(0xfffb) &&
+                                               rawCode[i] != static_cast<wchar_t>(0xfff9)) {
+                                        cleanCode += rawCode[i];
+                                    }
+                                }
+                                outInfo->codeText = std::move(cleanCode);
+                            }
+                        }
+                    }
+
+                    // 2. 向后兼容上一代旧版本笔记中的双行代码块 (顶栏带 [ 复制 ] 和 [ ▾ ])
+                    if (!found) {
+                        bool hasCopy = (tableText.find(L"复制") != std::wstring::npos);
+                        bool hasArrow = (tableText.find(L"\u25be") != std::wstring::npos ||
+                                         tableText.find(L"▾") != std::wstring::npos);
+
+                        if (hasCopy && hasArrow) {
+                            found = true;
+                            if (outInfo) {
+                                outInfo->isCodeBlock = true;
+                                outInfo->tableStart = tStart;
+                                outInfo->tableEnd = tEnd;
+
+                                size_t cell1EndIdx = tableText.find(static_cast<wchar_t>(0x07));
+                                size_t cell2EndIdx = (cell1EndIdx != std::wstring::npos) ?
+                                    tableText.find(static_cast<wchar_t>(0x07), cell1EndIdx + 1) : std::wstring::npos;
+
+                                if (cell1EndIdx != std::wstring::npos && cell2EndIdx != std::wstring::npos) {
+                                    std::wstring cell1Text = tableText.substr(0, cell1EndIdx);
+                                    outInfo->currentLang = common::CodeLanguage::PlainText;
+                                    if (cell1Text.find(L"C++") != std::wstring::npos || cell1Text.find(L"C / C++") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::Cpp;
+                                    } else if (cell1Text.find(L"Python") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::Python;
+                                    } else if (cell1Text.find(L"JavaScript") != std::wstring::npos || cell1Text.find(L"TypeScript") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::JavaScript;
+                                    } else if (cell1Text.find(L"SQL") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::Sql;
+                                    } else if (cell1Text.find(L"Shell") != std::wstring::npos || cell1Text.find(L"Bash") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::Shell;
+                                    } else if (cell1Text.find(L"HTML") != std::wstring::npos || cell1Text.find(L"XML") != std::wstring::npos) {
+                                        outInfo->currentLang = common::CodeLanguage::Html;
+                                    } else {
+                                        outInfo->currentLang = common::CodeLanguage::PlainText;
+                                    }
+
+                                    size_t codeStartIdx = cell2EndIdx + 1;
+                                    while (codeStartIdx < tableText.size() &&
+                                           (tableText[codeStartIdx] == 0xfffb ||
+                                            tableText[codeStartIdx] == 0xfff9 ||
+                                            tableText[codeStartIdx] == L'\r' ||
+                                            tableText[codeStartIdx] == L'\n')) {
+                                        codeStartIdx++;
+                                    }
+                                    outInfo->codeStart = tStart + static_cast<long>(codeStartIdx);
+
+                                    size_t codeEndIdx = tableText.find(static_cast<wchar_t>(0x07), codeStartIdx);
+                                    if (codeEndIdx == std::wstring::npos) {
+                                        codeEndIdx = tableText.find(static_cast<wchar_t>(0xfffb), codeStartIdx);
+                                    }
+                                    if (codeEndIdx == std::wstring::npos) {
+                                        codeEndIdx = tableText.size();
+                                    }
+                                    outInfo->codeEnd = tStart + static_cast<long>(codeEndIdx);
+
+                                    std::wstring rawCode = tableText.substr(codeStartIdx, codeEndIdx - codeStartIdx);
+                                    std::wstring cleanCode;
+                                    cleanCode.reserve(rawCode.size());
+                                    for (size_t i = 0; i < rawCode.size(); ++i) {
+                                        if (rawCode[i] == L'\r') {
+                                            cleanCode += L"\r\n";
+                                            if (i + 1 < rawCode.size() && rawCode[i + 1] == L'\n') {
+                                                i++;
+                                            }
+                                        } else {
+                                            cleanCode += rawCode[i];
+                                        }
+                                    }
+                                    outInfo->codeText = std::move(cleanCode);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            pRange->Release();
+        }
+        pDoc2->Release();
+    }
+    pUnk->Release();
+    return found;
+}
+
+bool RichEditView::CopyCodeBlockText(const CodeBlockInfo& info) const {
+    if (!m_hWnd) return false;
+    if (!OpenClipboard(m_hWnd)) return false;
+    EmptyClipboard();
+
+    const std::wstring& text = info.codeText;
+    size_t byteCount = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+    if (hGlob) {
+        void* pMem = GlobalLock(hGlob);
+        if (pMem) {
+            memcpy(pMem, text.c_str(), byteCount);
+            GlobalUnlock(hGlob);
+            SetClipboardData(CF_UNICODETEXT, hGlob);
+        }
+    }
+    CloseClipboard();
+    return true;
+}
+
+bool RichEditView::SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::CodeLanguage newLang) {
+    if (!m_hWnd || !info.isCodeBlock) return false;
+
+    std::string newRtf = common::SyntaxHighlighter::GenerateRtfCodeBlock(info.codeText, newLang);
+
+    CHARRANGE cr = { info.tableStart, info.tableEnd };
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+
+    bool ok = StreamInSelectionRTF(newRtf);
+    if (ok) {
+        CodeBlockInfo newInfo;
+        if (GetCodeBlockAt(info.tableStart, &newInfo)) {
+            CHARRANGE crTarget = { newInfo.codeStart, newInfo.codeStart };
+            SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&crTarget));
+            RECT rcBlock = GetCodeBlockRect(newInfo);
+            m_hoverBar.AttachToCodeBlock(newInfo, rcBlock);
+        }
+        ApplyDefaultFormatting(false);
+        PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
+        SendMessageW(GetParent(m_hWnd), WM_CODEBLOCK_LANG_CHANGED, static_cast<WPARAM>(newLang), 0);
+    }
+    return ok;
+}
+
+RECT RichEditView::GetCodeBlockRect(const CodeBlockInfo& info) const {
+    RECT rc = { 0, 0, 0, 0 };
+    if (!m_hWnd || !info.isCodeBlock) return rc;
+
+    // 优先采用 TOM ITextRange2::GetPoint 精确读取当前渲染排版的像素坐标
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (pUnk) {
+        ITextDocument2* pDoc2 = nullptr;
+        if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+            ITextRange2* pRange = nullptr;
+            if (SUCCEEDED(pDoc2->Range2(info.tableStart, info.tableEnd, &pRange))) {
+                long top = 0, left = 0, bottom = 0, right = 0;
+                if (SUCCEEDED(pRange->GetPoint(tomStart | TA_TOP | TA_LEFT, &left, &top)) &&
+                    SUCCEEDED(pRange->GetPoint(tomEnd | TA_BOTTOM | TA_RIGHT, &right, &bottom))) {
+                    POINT pt1 = { static_cast<int>(left), static_cast<int>(top) };
+                    POINT pt2 = { static_cast<int>(right), static_cast<int>(bottom) };
+                    ScreenToClient(m_hWnd, &pt1);
+                    ScreenToClient(m_hWnd, &pt2);
+
+                    if (pt2.x > pt1.x && pt2.y > pt1.y) {
+                        rc.left = pt1.x;
+                        rc.top = pt1.y;
+                        rc.right = pt2.x;
+                        rc.bottom = pt2.y;
+                    }
+                }
+                pRange->Release();
+            }
+            pDoc2->Release();
+        }
+        pUnk->Release();
+    }
+
+    // 后备方案：若 GetPoint 未能成功获取，则结合 EM_POSFROMCHAR 精确回退
+    if (rc.right <= rc.left || rc.bottom <= rc.top) {
+        POINTL ptStart = { 0, 0 };
+        SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptStart), info.tableStart);
+
+        POINTL ptEnd = { 0, 0 };
+        SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptEnd), std::max(info.tableStart, info.tableEnd - 1));
+
+        UINT dpi = GetDpiForWindow(m_hWnd);
+        if (dpi == 0) dpi = 96;
+
+        rc.left = ptStart.x > 0 ? ptStart.x : MulDiv(28, dpi, 96);
+        rc.top = ptStart.y;
+        rc.right = ptEnd.x > rc.left ? ptEnd.x : MulDiv(28, dpi, 96) + MulDiv(8600, dpi, 1440);
+        rc.bottom = ptEnd.y + MulDiv(36, dpi, 96);
+    }
+
+    return rc;
+}
+
+void RichEditView::OnMouseMove(long charPos, POINT /*ptClient*/) {
+    if (!m_hWnd) return;
+    // A queued editor mouse event must not steal the target from its child bar.
+    if (m_hoverBar.IsInteracting()) return;
+
+    CodeBlockInfo info;
+    if (charPos >= 0 && GetCodeBlockAt(charPos, &info)) {
+        RECT rcBlock = GetCodeBlockRect(info);
+        m_hoverBar.AttachToCodeBlock(info, rcBlock);
+    } else {
+        // 鼠标移出代码块时，若光标仍在某个代码块内，保持悬浮条吸附在光标所在代码块
+        CodeBlockInfo cursorInfo;
+        if (GetCodeBlockAtCursor(&cursorInfo)) {
+            RECT rcBlock = GetCodeBlockRect(cursorInfo);
+            m_hoverBar.AttachToCodeBlock(cursorInfo, rcBlock);
+        } else {
+            // 光标也不在代码块内，且鼠标不在悬浮条自身之上 -> 隐藏
+            if (!m_hoverBar.IsMouseOver()) {
+                m_hoverBar.Hide();
+            }
+        }
+    }
+}
+
+void RichEditView::OnMouseLeave() {
+    if (!m_hWnd) return;
+    // Entering the child bar also sends WM_MOUSELEAVE to RichEdit. Keep the
+    // hovered block instead of moving back to the block containing the caret.
+    if (m_hoverBar.IsInteracting()) return;
+
+    // 鼠标离开 RichEdit 控件：若光标仍停留在代码块内，悬浮条继续显示；否则隐藏
+    CodeBlockInfo cursorInfo;
+    if (GetCodeBlockAtCursor(&cursorInfo)) {
+        RECT rcBlock = GetCodeBlockRect(cursorInfo);
+        m_hoverBar.AttachToCodeBlock(cursorInfo, rcBlock);
+    } else {
+        if (!m_hoverBar.IsMouseOver()) {
+            m_hoverBar.Hide();
+        }
+    }
+}
+
+void RichEditView::OnSelChange() {
+    if (!m_hWnd) return;
+    if (m_hoverBar.IsInteracting()) return;
+
+    CodeBlockInfo cursorInfo;
+    if (GetCodeBlockAtCursor(&cursorInfo)) {
+        RECT rcBlock = GetCodeBlockRect(cursorInfo);
+        m_hoverBar.AttachToCodeBlock(cursorInfo, rcBlock);
+    } else {
+        // 光标不在代码块内：检查鼠标是否当前正悬停在某个代码块上
+        POINT ptCursor;
+        GetCursorPos(&ptCursor);
+        ScreenToClient(m_hWnd, &ptCursor);
+        POINTL ptl = { ptCursor.x, ptCursor.y };
+        LRESULT hoverCharPos = SendMessageW(m_hWnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl));
+
+        CodeBlockInfo hoverInfo;
+        if (hoverCharPos >= 0 && GetCodeBlockAt(static_cast<long>(hoverCharPos), &hoverInfo)) {
+            RECT rcBlock = GetCodeBlockRect(hoverInfo);
+            m_hoverBar.AttachToCodeBlock(hoverInfo, rcBlock);
+        } else {
+            if (!m_hoverBar.IsMouseOver()) {
+                m_hoverBar.Hide();
+            }
+        }
+    }
+}
+
+void RichEditView::UpdateHoverBarPosition() {
+    if (!m_hWnd) return;
+
+    long activeTable = m_hoverBar.GetActiveTableStart();
+    if (activeTable < 0) return;
+
+    CodeBlockInfo info;
+    if (!GetCodeBlockAt(activeTable, &info)) {
+        m_hoverBar.Hide();
+        return;
+    }
+
+    RECT rcBlock = GetCodeBlockRect(info);
+    RECT rcClient;
+    GetClientRect(m_hWnd, &rcClient);
+
+    UINT dpi = GetDpiForWindow(m_hWnd);
+    if (dpi == 0) dpi = 96;
+    int minVisibleH = MulDiv(16, dpi, 96);
+
+    // 视口判断：完全滚出可视区域或残余高度过小时隐藏
+    if (rcBlock.bottom <= minVisibleH || rcBlock.top >= rcClient.bottom) {
+        m_hoverBar.Hide();
+    } else {
+        m_hoverBar.UpdatePosition(rcBlock);
+    }
 }
 
 bool RichEditView::IsCursorInTable() const {
@@ -917,6 +1506,15 @@ std::wstring RichEditView::GetPlainText() const {
     textInfo.codepage = 1200;
     LONG copied = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTEX, reinterpret_cast<WPARAM>(&textInfo), reinterpret_cast<LPARAM>(text.data())));
     text.resize(static_cast<size_t>(copied));
+
+    // Code block language tags are hidden RTF metadata. RichEdit still exposes
+    // them through plain text, so remove them before indexing and persistence.
+    size_t searchPos = 0;
+    while ((searchPos = text.find(L"[lang:", searchPos)) != std::wstring::npos) {
+        size_t endPos = text.find(L']', searchPos + 6);
+        if (endPos == std::wstring::npos) break;
+        text.erase(searchPos, endPos - searchPos + 1);
+    }
     return text;
 }
 
