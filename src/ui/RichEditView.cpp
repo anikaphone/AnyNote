@@ -150,7 +150,17 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
 
     const bool shouldUpdateHoverBar = pThis &&
         (uMsg == WM_VSCROLL || uMsg == WM_HSCROLL || uMsg == WM_MOUSEWHEEL || uMsg == WM_SIZE);
+    const bool shouldRepaintAfterScroll = pThis &&
+        (uMsg == WM_VSCROLL || uMsg == WM_HSCROLL || uMsg == WM_MOUSEWHEEL);
     LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    if (shouldRepaintAfterScroll) {
+        // RichEdit scrolls by moving pixels and may leave the custom code-block
+        // frame layer out of sync at the newly exposed bottom edge.  Invalidate
+        // the complete editor so both RichEdit and the overlay repaint from a
+        // clean backing surface; resizing naturally did this before.
+        RedrawWindow(hWnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
     if (uMsg == WM_PAINT && pThis) pThis->PaintCodeBlockFrames();
     if (shouldUpdateHoverBar) {
         pThis->UpdateHoverBarPosition();
@@ -1078,22 +1088,24 @@ void RichEditView::RefreshCodeBlockLayout() {
 
 void RichEditView::PaintCodeBlockFrames() {
     if (m_updatingCodeLayout) return;
-    RECT client;
-    GetClientRect(m_hWnd, &client);
     const int firstLine = static_cast<int>(SendMessageW(m_hWnd, EM_GETFIRSTVISIBLELINE, 0, 0));
     const int lines = static_cast<int>(SendMessageW(m_hWnd, EM_GETLINECOUNT, 0, 0));
     HDC dc = GetDC(m_hWnd);
     const int saved = SaveDC(dc);
     RECT format;
     SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
-    IntersectClipRect(dc, 0, format.top, client.right, client.bottom);
+    // RichEdit's formatting rectangle excludes the reserved bottom margin and
+    // scrollbar area.  Keep the overlay inside that same viewport: drawing to
+    // client.bottom leaves stale rounded borders/text in the editor's bottom
+    // margin after scrolling a code block.
+    IntersectClipRect(dc, format.left, format.top, format.right, format.bottom);
     long lastTableEnd = -1;
     const int radius = MulDiv(8, GetDpiForWindow(m_hWnd), 96);
     for (int line = firstLine; line < lines; ++line) {
         const long pos = static_cast<long>(SendMessageW(m_hWnd, EM_LINEINDEX, line, 0));
         POINTL point{};
         SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&point), pos);
-        if (point.y > client.bottom) break;
+        if (point.y > format.bottom) break;
         if (pos < lastTableEnd) continue;
         CodeBlockInfo info;
         if (!GetCodeBlockAt(pos, &info)) continue;

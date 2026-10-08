@@ -12,6 +12,7 @@ cmake_install.cmake
 CMakeScripts/
 Testing/
 Makefile
+/TestReadme.txt
 
 # 本地用户专属 CMake Presets（团队共享 CMakePresets.json，个人配置 CMakeUserPresets.json）
 CMakeUserPresets.json
