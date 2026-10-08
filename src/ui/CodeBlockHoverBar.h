@@ -12,7 +12,7 @@ struct CodeBlockInfo;
 class CodeBlockHoverBar {
 public:
     using LanguageChangedCallback = std::function<void(common::CodeLanguage)>;
-    using CopyClickedCallback = std::function<void()>;
+    using CopyClickedCallback = std::function<bool()>;
 
     CodeBlockHoverBar() = default;
     ~CodeBlockHoverBar();

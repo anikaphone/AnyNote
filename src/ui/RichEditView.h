@@ -76,6 +76,8 @@ public:
     void OnSelChange();
     void UpdateHoverBarPosition();
     RECT GetCodeBlockRect(const CodeBlockInfo& info) const;
+    void RefreshCodeBlockLayout();
+    void PaintCodeBlockFrames();
 
     // 表格操作 (插入 3*2 表格、行列调整、删除、单元格导航)
     bool InsertTable(int rows = 2, int cols = 3);
@@ -114,6 +116,8 @@ private:
     std::vector<CHARFORMAT2W> m_markedFormats;
 
     void ApplyDefaultFormatting(bool allDocument = false);
+    void ApplyCodeTypingFormat();
+    bool m_updatingCodeLayout = false;
 };
 
 } // namespace anynote::ui

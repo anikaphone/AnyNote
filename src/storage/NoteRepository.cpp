@@ -1,5 +1,6 @@
 #include "NoteRepository.h"
 #include "common/StringUtils.h"
+#include "common/SyntaxHighlighter.h"
 #include <sqlite3.h>
 #include <chrono>
 #include <algorithm>
@@ -16,6 +17,14 @@ int64_t GetCurrentUnixTimestamp() {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
+}
+
+std::string BuildDefaultCodeFragment(std::wstring_view code, common::CodeLanguage language) {
+    // These welcome documents use the same font/color tables as the generator.
+    // Reuse its complete row, including hidden language metadata and spacing.
+    const auto rtf = common::SyntaxHighlighter::GenerateRtfCodeBlock(code, language);
+    const auto start = rtf.find("\\trowd");
+    return rtf.substr(start, rtf.size() - start - 1);
 }
 
 std::string BuildDefaultWelcomeRtf() {
@@ -37,19 +46,14 @@ std::string BuildDefaultWelcomeRtf() {
     rtf += "\\pard\\cf3 " + WideToRtf(L"下方即为原生嵌入的代码块示例：") + "\\par\\par";
 
     // 嵌入示例代码卡片
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"// C++ 示例代码块") + "\\par";
-    rtf += "\\cf5 #include\\cf3  <iostream>\\par\\par";
-    rtf += "\\cf4 int\\cf3  main() {\\par";
-    rtf += "    std::cout << \\cf6 \"Hello, AnyNote Native CodeBlock!\"\\cf3  << std::endl;\\par";
-    rtf += "    \\cf4 return\\cf3  0;\\par";
-    rtf += "}\\cell\\row\n";
+    rtf += BuildDefaultCodeFragment(LR"code(// C++ 示例代码块
+#include <iostream>
+
+int main() {
+    std::cout << "Hello, AnyNote Native CodeBlock!" << std::endl;
+    return 0;
+})code",
+        common::CodeLanguage::Cpp);
     rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"可以在此继续输入正文，或选中文本后按 ") + "\\b Ctrl+K\\b0 " + WideToRtf(L" 转换为代码块！") + "\\par";
     rtf += "}";
     return rtf;
@@ -123,26 +127,20 @@ std::string BuildDefaultCppRtf() {
     rtf += "• \\b " + WideToRtf(L"零第三方 DLL 依赖") + "\\b0 " + WideToRtf(L"：全静态链接便携发行。") + "\\par\\par";
     rtf += "\\cf3 " + WideToRtf(L"消息分发核心代码封装实现如下：") + "\\par\\par";
 
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"// Window 抽象基类消息路由回调") + "\\par";
-    rtf += "\\cf9 LRESULT\\cf3  \\cf9 CALLBACK\\cf3  Window::StaticWndProc(\\cf9 HWND\\cf3  hWnd, \\cf9 UINT\\cf3  uMsg, \\cf9 WPARAM\\cf3  wParam, \\cf9 LPARAM\\cf3  lParam) {\\par";
-    rtf += "    \\cf4 auto\\cf3 * pThis = \\cf4 reinterpret_cast\\cf3 <Window*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));\\par";
-    rtf += "    \\cf4 if\\cf3  (uMsg == WM_NCCREATE) {\\par";
-    rtf += "        \\cf4 auto\\cf3 * pCreate = \\cf4 reinterpret_cast\\cf3 <CREATESTRUCTW*>(lParam);\\par";
-    rtf += "        pThis = \\cf4 reinterpret_cast\\cf3 <Window*>(pCreate->lpCreateParams);\\par";
-    rtf += "        \\cf4 if\\cf3  (pThis) {\\par";
-    rtf += "            pThis->m_hWnd = hWnd;\\par";
-    rtf += "            SetWindowLongPtrW(hWnd, GWLP_USERDATA, \\cf4 reinterpret_cast\\cf3 <\\cf9 LONG_PTR\\cf3 >(pThis));\\par";
-    rtf += "        }\\par";
-    rtf += "    }\\par";
-    rtf += "    \\cf4 return\\cf3  pThis ? pThis->HandleMessage(uMsg, wParam, lParam) : DefWindowProcW(hWnd, uMsg, wParam, lParam);\\par";
-    rtf += "}\\cell\\row\n";
+    rtf += BuildDefaultCodeFragment(LR"code(// Window 抽象基类消息路由回调
+LRESULT CALLBACK Window::StaticWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    auto* pThis = reinterpret_cast<Window*>(GetWindowLongPtrW(hWnd, GWLP_USERDATA));
+    if (uMsg == WM_NCCREATE) {
+        auto* pCreate = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        pThis = reinterpret_cast<Window*>(pCreate->lpCreateParams);
+        if (pThis) {
+            pThis->m_hWnd = hWnd;
+            SetWindowLongPtrW(hWnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(pThis));
+        }
+    }
+    return pThis ? pThis->HandleMessage(uMsg, wParam, lParam) : DefWindowProcW(hWnd, uMsg, wParam, lParam);
+})code",
+        common::CodeLanguage::Cpp);
     rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"这种封装方式优雅兼顾面向对象与 Win32 原生性能。") + "\\par";
     rtf += "}";
     return rtf;
@@ -158,30 +156,25 @@ std::string BuildDefaultSqliteRtf() {
     rtf += "\\cf3 " + WideToRtf(L"SQLite3 Multiple Ciphers 支持 AES-256-CBC, AES-256-GCM 等工业级高强度加密。") + "\\par";
     rtf += WideToRtf(L"数据库核心表结构定义如下：") + "\\par\\par";
 
-    rtf += "\\trowd\\trgaph108\\trleft360";
-    rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
-    rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb0\\sa0\\f1\\fs19\\cf3 ";
-    rtf += "\\cf7 " + WideToRtf(L"-- 节点元数据表") + "\\par";
-    rtf += "\\cf4 CREATE TABLE IF NOT EXISTS\\cf3  nodes (\\par";
-    rtf += "    id            \\cf4 INTEGER PRIMARY KEY AUTOINCREMENT\\cf3 ,\\par";
-    rtf += "    parent_id     \\cf4 INTEGER NOT NULL DEFAULT\\cf3  0,\\par";
-    rtf += "    sequence      \\cf4 INTEGER NOT NULL DEFAULT\\cf3  0,\\par";
-    rtf += "    title         \\cf4 TEXT NOT NULL\\cf3 ,\\par";
-    rtf += "    node_type     \\cf4 INTEGER NOT NULL DEFAULT\\cf3  0,\\par";
-    rtf += "    created_time  \\cf4 INTEGER NOT NULL\\cf3 ,\\par";
-    rtf += "    modified_time \\cf4 INTEGER NOT NULL\\cf3 \\par";
-    rtf += ");\\par\\par";
-    rtf += "\\cf7 " + WideToRtf(L"-- 正文 RTF 字节流存储表") + "\\par";
-    rtf += "\\cf4 CREATE TABLE IF NOT EXISTS\\cf3  node_contents (\\par";
-    rtf += "    node_id       \\cf4 INTEGER PRIMARY KEY\\cf3 ,\\par";
-    rtf += "    format_type   \\cf4 INTEGER NOT NULL DEFAULT\\cf3  1,\\par";
-    rtf += "    content_rtf   \\cf4 BLOB\\cf3 ,\\par";
-    rtf += "    \\cf4 FOREIGN KEY\\cf3 (node_id) \\cf4 REFERENCES\\cf3  nodes(id) \\cf4 ON DELETE CASCADE\\cf3 \\par";
-    rtf += ");\\cell\\row\n";
+    rtf += BuildDefaultCodeFragment(LR"code(-- 节点元数据表
+CREATE TABLE IF NOT EXISTS nodes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id     INTEGER NOT NULL DEFAULT 0,
+    sequence      INTEGER NOT NULL DEFAULT 0,
+    title         TEXT NOT NULL,
+    node_type     INTEGER NOT NULL DEFAULT 0,
+    created_time  INTEGER NOT NULL,
+    modified_time INTEGER NOT NULL
+);
+
+-- 正文 RTF 字节流存储表
+CREATE TABLE IF NOT EXISTS node_contents (
+    node_id       INTEGER PRIMARY KEY,
+    format_type   INTEGER NOT NULL DEFAULT 1,
+    content_rtf   BLOB,
+    FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);)code",
+        common::CodeLanguage::Sql);
     rtf += "\\pard\\f0\\fs22\\par\\cf3 " + WideToRtf(L"全库加密时通过 sqlite3_key / sqlite3_rekey 即可实现透明加解密。") + "\\par";
     rtf += "}";
     return rtf;

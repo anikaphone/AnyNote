@@ -10,6 +10,17 @@ namespace {
 
 constexpr UINT_PTR TIMER_COPIED_RESET = 1001;
 
+HFONT CreateBarFont(UINT dpi) {
+    return CreateFontW(
+        -MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+}
+
+std::wstring LanguageLabel(common::CodeLanguage language) {
+    return std::wstring(common::GetLanguageShortName(language)) + L" \u25be";
+}
+
 } // namespace
 
 CodeBlockHoverBar::~CodeBlockHoverBar() {
@@ -66,12 +77,20 @@ LRESULT CALLBACK CodeBlockHoverBar::WndProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 }
 
 int CodeBlockHoverBar::CalculateWidth(UINT dpi) const {
-    const wchar_t* langName = common::GetLanguageShortName(m_currentLang);
-    size_t len = wcslen(langName);
-    int langWidth = MulDiv(static_cast<int>(len * 8 + 26), dpi, 96);
-    langWidth = std::max(langWidth, MulDiv(58, dpi, 96));
-    int copyWidth = MulDiv(56, dpi, 96);
-    return langWidth + copyWidth;
+    // Measure with the same font and text renderer used by Paint, including
+    // font fallback for Chinese and the dropdown arrow.
+    HDC dc = GetDC(m_hWnd);
+    if (!dc) return MulDiv(204, dpi, 96);
+    HFONT font = CreateBarFont(dpi);
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    RECT textRect{};
+    const std::wstring label = LanguageLabel(m_currentLang);
+    DrawTextW(dc, label.c_str(), -1, &textRect, DT_CALCRECT | DT_SINGLELINE);
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
+    ReleaseDC(m_hWnd, dc);
+    // Fixed copy area; symmetric 10-DIP padding around the language label.
+    return MulDiv(76, dpi, 96) + 2 * MulDiv(10, dpi, 96) + textRect.right;
 }
 
 void CodeBlockHoverBar::AttachToCodeBlock(const CodeBlockInfo& info, const RECT& rcBlockInParent) {
@@ -100,15 +119,19 @@ void CodeBlockHoverBar::UpdatePosition(const RECT& rcBlockInParent) {
     int barH = MulDiv(24, dpi, 96);
 
     int marginX = MulDiv(8, dpi, 96);
-    int marginY = MulDiv(4, dpi, 96);
+    int marginY = MulDiv(6, dpi, 96);
 
-    int barX = rcBlockInParent.right - barW - marginX;
+    RECT client;
+    GetClientRect(m_hParent, &client);
+    int barX = std::max(0L, std::min(rcBlockInParent.right, client.right) - barW - marginX);
     int barY = rcBlockInParent.top + marginY;
 
-    // 视口上方吸附：若代码块头部滚出视口，悬浮条固定在可视区域顶部
-    int minViewportY = MulDiv(4, dpi, 96);
-    if (barY < minViewportY) {
-        barY = minViewportY;
+    // Actions float at the top-right; hide when the block top leaves the viewport.
+    RECT format;
+    SendMessageW(m_hParent, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+    if (barY < format.top || rcBlockInParent.right - rcBlockInParent.left < barW + 2 * marginX) {
+        ShowWindow(m_hWnd, SW_HIDE);
+        return;
     }
 
     // 保证悬浮条底边不超出代码块底边
@@ -245,11 +268,10 @@ void CodeBlockHoverBar::OnMouseMove(int x, int /*y*/) {
     UINT dpi = GetDpiForWindow(m_hWnd);
     if (dpi == 0) dpi = 96;
 
-    int copyWidth = MulDiv(56, dpi, 96);
-    int sepX = rc.right - copyWidth;
+    int sepX = MulDiv(76, dpi, 96);
 
-    bool newHoverLang = (x < sepX);
-    bool newHoverCopy = (x >= sepX);
+    bool newHoverLang = (x >= sepX);
+    bool newHoverCopy = (x < sepX);
 
     if (newHoverLang != m_hoverLang || newHoverCopy != m_hoverCopy) {
         m_hoverLang = newHoverLang;
@@ -272,10 +294,9 @@ void CodeBlockHoverBar::OnLButtonUp(int x, int /*y*/) {
     UINT dpi = GetDpiForWindow(m_hWnd);
     if (dpi == 0) dpi = 96;
 
-    int copyWidth = MulDiv(56, dpi, 96);
-    int sepX = rc.right - copyWidth;
+    int sepX = MulDiv(76, dpi, 96);
 
-    if (x < sepX) {
+    if (x >= sepX) {
         // 点击语言切换区域 -> 弹出语言下拉菜单
         HMENU hMenu = CreatePopupMenu();
         if (hMenu) {
@@ -296,7 +317,7 @@ void CodeBlockHoverBar::OnLButtonUp(int x, int /*y*/) {
             int selected = TrackPopupMenu(
                 hMenu,
                 TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                rcWindow.left, rcWindow.bottom + 2,
+                rcWindow.left + sepX, rcWindow.bottom + 2,
                 0, m_hWnd, nullptr
             );
             m_languageMenuOpen = false;
@@ -316,11 +337,10 @@ void CodeBlockHoverBar::OnLButtonUp(int x, int /*y*/) {
         }
     } else {
         // 点击复制区域 -> 触发复制代码并展示反馈
-        if (m_onCopyClicked) {
-            m_onCopyClicked();
+        if (m_onCopyClicked && m_onCopyClicked()) {
+            m_isCopied = true;
+            SetTimer(m_hWnd, TIMER_COPIED_RESET, 1500, nullptr);
         }
-        m_isCopied = true;
-        SetTimer(m_hWnd, TIMER_COPIED_RESET, 1500, nullptr);
         InvalidateRect(m_hWnd, nullptr, FALSE);
     }
 }
@@ -345,8 +365,8 @@ void CodeBlockHoverBar::Paint(HDC hdc) {
     FillRect(memDC, &rc, cardBgBrush);
     DeleteObject(cardBgBrush);
 
-    // 1. 胶囊底板背景与微阴影细边框 (Fluent 纯白卡片)
-    HBRUSH bgBrush = CreateSolidBrush(RGB(255, 255, 255));
+    // 1. 与代码块一致的浅灰底板和细边框
+    HBRUSH bgBrush = CreateSolidBrush(RGB(246, 248, 250));
     HPEN borderPen = CreatePen(PS_SOLID, 1, RGB(218, 222, 228));
     HGDIOBJ oldBrush = SelectObject(memDC, bgBrush);
     HGDIOBJ oldPen = SelectObject(memDC, borderPen);
@@ -354,12 +374,11 @@ void CodeBlockHoverBar::Paint(HDC hdc) {
     int corner = MulDiv(5, dpi, 96);
     RoundRect(memDC, 0, 0, width, height, corner * 2, corner * 2);
 
-    int copyWidth = MulDiv(56, dpi, 96);
-    int sepX = width - copyWidth;
+    int sepX = MulDiv(76, dpi, 96);
 
     // 2. 语言按钮悬停高亮
     if (m_hoverLang) {
-        RECT rcLangBg = { 1, 1, sepX - 1, height - 1 };
+        RECT rcLangBg = { sepX + 1, 1, width - 1, height - 1 };
         HBRUSH hoverBrush = CreateSolidBrush(RGB(242, 244, 247));
         FillRect(memDC, &rcLangBg, hoverBrush);
         DeleteObject(hoverBrush);
@@ -367,7 +386,7 @@ void CodeBlockHoverBar::Paint(HDC hdc) {
 
     // 3. 复制按钮悬停高亮
     if (m_hoverCopy) {
-        RECT rcCopyBg = { sepX + 1, 1, width - 1, height - 1 };
+        RECT rcCopyBg = { 1, 1, sepX - 1, height - 1 };
         COLORREF hoverColor = m_isCopied ? RGB(235, 248, 240) : RGB(240, 245, 255);
         HBRUSH hoverBrush = CreateSolidBrush(hoverColor);
         FillRect(memDC, &rcCopyBg, hoverBrush);
@@ -380,30 +399,27 @@ void CodeBlockHoverBar::Paint(HDC hdc) {
     int padY = MulDiv(5, dpi, 96);
     MoveToEx(memDC, sepX, padY, nullptr);
     LineTo(memDC, sepX, height - padY);
+    SelectObject(memDC, borderPen);
     DeleteObject(sepPen);
 
     // 5. 文字渲染
-    HFONT hFont = CreateFontW(
-        -MulDiv(9, dpi, 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
-    );
+    HFONT hFont = CreateBarFont(dpi);
     HGDIOBJ oldFont = SelectObject(memDC, hFont);
     SetBkMode(memDC, TRANSPARENT);
 
-    // 左侧语言名称 + ▾
-    std::wstring langStr = std::wstring(common::GetLanguageShortName(m_currentLang)) + L" \u25be";
-    RECT rcLangText = { MulDiv(8, dpi, 96), 0, sepX - MulDiv(4, dpi, 96), height };
+    // 右侧语言名称 + ▾
+    const std::wstring langStr = LanguageLabel(m_currentLang);
+    RECT rcLangText = { sepX + MulDiv(10, dpi, 96), 0, width - MulDiv(10, dpi, 96), height };
     SetTextColor(memDC, RGB(66, 74, 83));
     DrawTextW(memDC, langStr.c_str(), -1, &rcLangText, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    // 右侧复制文字 / 已复制反馈
-    RECT rcCopyText = { sepX, 0, width, height };
+    // 左侧复制文字 / 已复制反馈
+    RECT rcCopyText = { 0, 0, sepX, height };
     if (m_isCopied) {
         SetTextColor(memDC, RGB(26, 127, 55)); // 优雅成功绿
         DrawTextW(memDC, L"\u2714 \u5df2\u590d\u5236", -1, &rcCopyText, DT_CENTER | DT_VCENTER | DT_SINGLELINE); // ✔ 已复制
     } else {
-        SetTextColor(memDC, RGB(9, 105, 218)); // 经典 Fluent 品蓝
+        SetTextColor(memDC, RGB(66, 74, 83));
         DrawTextW(memDC, L"\u29c9 \u590d\u5236", -1, &rcCopyText, DT_CENTER | DT_VCENTER | DT_SINGLELINE); // ⧉ 复制
     }
 

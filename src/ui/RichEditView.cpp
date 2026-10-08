@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <gdiplus.h>
 #include <tom.h>
+#include <wrl/client.h>
 
 namespace anynote::ui {
 
@@ -71,6 +72,10 @@ DWORD CALLBACK StreamOutCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LON
 static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     auto* pThis = reinterpret_cast<RichEditView*>(dwRefData);
     if (uMsg == WM_KEYDOWN && wParam == VK_TAB && pThis) {
+        if (pThis->GetCodeBlockAtCursor()) {
+            SendMessageW(hWnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"    "));
+            return 0;
+        }
         if (pThis->IsCursorInTable()) {
             bool isShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             if (isShift) {
@@ -92,8 +97,13 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
         return 0;
     }
     if (uMsg == WM_CHAR && wParam == VK_RETURN && pThis) {
+        const bool inCode = pThis->GetCodeBlockAtCursor();
         int curLevel = pThis->GetCurrentHeadingLevel();
         LRESULT res = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        if (inCode) {
+            pThis->RefreshCodeBlockLayout();
+            pThis->UpdateHoverBarPosition();
+        }
         if (curLevel > 0 && !pThis->IsCursorInTable()) {
             pThis->ApplyHeading(0);
         }
@@ -141,7 +151,23 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
     const bool shouldUpdateHoverBar = pThis &&
         (uMsg == WM_VSCROLL || uMsg == WM_HSCROLL || uMsg == WM_MOUSEWHEEL || uMsg == WM_SIZE);
     LRESULT result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+    if (uMsg == WM_PAINT && pThis) pThis->PaintCodeBlockFrames();
     if (shouldUpdateHoverBar) {
+        pThis->UpdateHoverBarPosition();
+    }
+    const bool shouldRefreshCodeLayout = pThis &&
+        (uMsg == WM_CHAR || uMsg == WM_SETTEXT || uMsg == WM_CUT ||
+         uMsg == WM_PASTE || uMsg == WM_CLEAR || uMsg == WM_UNDO ||
+         uMsg == EM_UNDO || uMsg == EM_REDO || uMsg == EM_REPLACESEL ||
+         uMsg == EM_STREAMIN || uMsg == EM_SETTEXTEX || uMsg == EM_PASTESPECIAL ||
+         uMsg == EM_SETCHARFORMAT || uMsg == EM_SETPARAFORMAT ||
+         (uMsg == WM_KEYDOWN && (wParam == VK_DELETE ||
+          (wParam == VK_INSERT && (GetKeyState(VK_SHIFT) & 0x8000) != 0) ||
+          ((GetKeyState(VK_CONTROL) & 0x8000) != 0 &&
+           (wParam == 'X' || wParam == 'V' || wParam == 'Z' || wParam == 'Y')))));
+    if (shouldRefreshCodeLayout) {
+        // Normalize only after the complete edit, without adding layout to undo history.
+        pThis->RefreshCodeBlockLayout();
         pThis->UpdateHoverBarPosition();
     }
     switch (uMsg) {
@@ -162,6 +188,8 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
     case EM_REDO:
     case EM_REPLACESEL:
     case EM_STREAMIN:
+    case EM_SETTEXTEX:
+    case EM_PASTESPECIAL:
     case EM_SETCHARFORMAT:
     case EM_SETPARAFORMAT:
         // 在完整操作结束后查询格式，避免读到加载/格式化中的临时选区。
@@ -241,9 +269,12 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
         CodeBlockInfo info;
         long activeTable = m_hoverBar.GetActiveTableStart();
         if (activeTable >= 0 && GetCodeBlockAt(activeTable, &info)) {
-            CopyCodeBlockText(info);
-            SendMessageW(GetParent(m_hWnd), WM_CODEBLOCK_COPIED, 0, 0);
+            if (CopyCodeBlockText(info)) {
+                SendMessageW(GetParent(m_hWnd), WM_CODEBLOCK_COPIED, 0, 0);
+                return true;
+            }
         }
+        return false;
     });
 
     ApplyDefaultFormatting(true);
@@ -289,6 +320,8 @@ void RichEditView::SetBounds(int x, int y, int width, int height, bool repaint) 
         rc.right = std::max(rc.left + 50, rc.right - marginX);
         rc.bottom = std::max(rc.top + 50, rc.bottom - bottomMargin);
         SendMessageW(m_hWnd, EM_SETRECTNP, 0, reinterpret_cast<LPARAM>(&rc));
+        RefreshCodeBlockLayout();
+        UpdateHoverBarPosition();
     }
 }
 
@@ -713,9 +746,18 @@ bool RichEditView::InsertCodeBlock(std::wstring_view codeContent, common::CodeLa
         }
     }
 
-    ApplyDefaultFormatting(false);
+    ApplyCodeTypingFormat();
     PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
     return ok;
+}
+
+void RichEditView::ApplyCodeTypingFormat() {
+    CHARFORMAT2W cf{sizeof(cf)};
+    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_BOLD | CFM_ITALIC | CFM_HIDDEN | CFM_BACKCOLOR;
+    cf.dwEffects = CFE_AUTOBACKCOLOR;
+    cf.yHeight = 220;
+    wcscpy_s(cf.szFaceName, L"Consolas");
+    SendMessageW(m_hWnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&cf));
 }
 
 bool RichEditView::GetCodeBlockAtCursor(CodeBlockInfo* outInfo) const {
@@ -907,21 +949,21 @@ bool RichEditView::GetCodeBlockAt(long charPos, CodeBlockInfo* outInfo) const {
 bool RichEditView::CopyCodeBlockText(const CodeBlockInfo& info) const {
     if (!m_hWnd) return false;
     if (!OpenClipboard(m_hWnd)) return false;
-    EmptyClipboard();
-
     const std::wstring& text = info.codeText;
     size_t byteCount = (text.size() + 1) * sizeof(wchar_t);
     HGLOBAL hGlob = GlobalAlloc(GMEM_MOVEABLE, byteCount);
+    bool copied = false;
     if (hGlob) {
         void* pMem = GlobalLock(hGlob);
         if (pMem) {
             memcpy(pMem, text.c_str(), byteCount);
             GlobalUnlock(hGlob);
-            SetClipboardData(CF_UNICODETEXT, hGlob);
+            copied = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, hGlob) != nullptr;
         }
+        if (!copied) GlobalFree(hGlob);
     }
     CloseClipboard();
-    return true;
+    return copied;
 }
 
 bool RichEditView::SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::CodeLanguage newLang) {
@@ -941,63 +983,196 @@ bool RichEditView::SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::Co
             RECT rcBlock = GetCodeBlockRect(newInfo);
             m_hoverBar.AttachToCodeBlock(newInfo, rcBlock);
         }
-        ApplyDefaultFormatting(false);
+        ApplyCodeTypingFormat();
         PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
         SendMessageW(GetParent(m_hWnd), WM_CODEBLOCK_LANG_CHANGED, static_cast<WPARAM>(newLang), 0);
     }
     return ok;
 }
 
+void RichEditView::RefreshCodeBlockLayout() {
+    if (!m_hWnd || m_updatingCodeLayout) return;
+    using Microsoft::WRL::ComPtr;
+    ComPtr<IUnknown> ole;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(ole.GetAddressOf()));
+    ComPtr<ITextDocument2> doc;
+    if (!ole || FAILED(ole.As(&doc))) return;
+    ComPtr<ITextRange2> search;
+    if (FAILED(doc->Range2(0, 0, &search))) return;
+    long length = 0;
+    search->GetStoryLength(&length);
+    search->SetRange(0, length);
+    BSTR story = nullptr;
+    search->GetText(&story);
+    const std::wstring text = story ? std::wstring(story, SysStringLen(story)) : std::wstring();
+    SysFreeString(story);
+    if (text.find(L"[lang:") == std::wstring::npos) return;
+    RECT format;
+    SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+    const UINT dpi = std::max(96U, GetDpiForWindow(m_hWnd));
+    const long width = std::max(600, MulDiv(format.right - format.left - 2, 1440, dpi));
+    const LRESULT modified = SendMessageW(m_hWnd, EM_GETMODIFY, 0, 0);
+    const LRESULT events = SendMessageW(m_hWnd, EM_GETEVENTMASK, 0, 0);
+    m_updatingCodeLayout = true;
+    SendMessageW(m_hWnd, EM_SETEVENTMASK, 0, 0);
+    long freezeCount = 0;
+    doc->Freeze(&freezeCount);
+    doc->Undo(tomSuspend, nullptr);
+    long next = 0;
+    while (next < static_cast<long>(text.size())) {
+        const size_t match = text.find(L"[lang:", static_cast<size_t>(next));
+        if (match == std::wstring::npos) break;
+        const long start = static_cast<long>(match);
+        next = start + 6;
+        CodeBlockInfo info;
+        if (!GetCodeBlockAt(start, &info)) continue;
+        next = std::max(next, info.tableEnd);
+        ComPtr<ITextRange2> range;
+        ComPtr<ITextRow> row;
+        if (FAILED(doc->Range2(info.codeStart, info.codeStart, &range)) ||
+            FAILED(range->GetRow(&row))) continue;
+        long cells = 0;
+        row->Reset(tomRowUpdate);
+        row->GetCellCount(&cells);
+        if (cells != 1) continue; // Leave legacy multi-cell tables intact.
+        row->SetCellIndex(0);
+        row->SetIndent(0);
+        row->SetCellMargin(240);
+        row->SetCellWidth(width);
+        row->SetCellColorBack(RGB(246, 248, 250));
+        row->SetCellShading(0);
+        row->SetCellBorderColors(RGB(225, 228, 232), RGB(225, 228, 232),
+            RGB(225, 228, 232), RGB(225, 228, 232));
+        row->SetCellBorderWidths(15, 15, 15, 15);
+        row->Apply(1, tomRowApplyDefault);
+
+        range->SetRange(info.codeStart, info.codeEnd);
+        ComPtr<ITextFont> font;
+        if (SUCCEEDED(range->GetFont(&font))) {
+            BSTR face = SysAllocString(L"Consolas");
+            font->SetName(face);
+            SysFreeString(face);
+            font->SetSize(11);
+            font->SetBackColor(tomAutoColor);
+        }
+        ComPtr<ITextPara> para;
+        if (SUCCEEDED(range->GetPara(&para))) {
+            para->SetSpaceBefore(0);
+            para->SetSpaceAfter(0);
+            para->SetLineSpacing(tomLineSpaceMultiple, 1.25f);
+        }
+        range->SetRange(info.codeStart, info.codeStart);
+        para.Reset();
+        if (SUCCEEDED(range->GetPara(&para))) para->SetSpaceBefore(10);
+        range->SetRange(std::max(info.codeStart, info.codeEnd - 1), std::max(info.codeStart, info.codeEnd - 1));
+        para.Reset();
+        if (SUCCEEDED(range->GetPara(&para))) para->SetSpaceAfter(10);
+    }
+    doc->Undo(tomResume, nullptr);
+    doc->Unfreeze(&freezeCount);
+    SendMessageW(m_hWnd, EM_SETMODIFY, modified, 0);
+    SendMessageW(m_hWnd, EM_SETEVENTMASK, 0, events);
+    m_updatingCodeLayout = false;
+    InvalidateRect(m_hWnd, nullptr, FALSE);
+}
+
+void RichEditView::PaintCodeBlockFrames() {
+    if (m_updatingCodeLayout) return;
+    RECT client;
+    GetClientRect(m_hWnd, &client);
+    const int firstLine = static_cast<int>(SendMessageW(m_hWnd, EM_GETFIRSTVISIBLELINE, 0, 0));
+    const int lines = static_cast<int>(SendMessageW(m_hWnd, EM_GETLINECOUNT, 0, 0));
+    HDC dc = GetDC(m_hWnd);
+    const int saved = SaveDC(dc);
+    RECT format;
+    SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+    IntersectClipRect(dc, 0, format.top, client.right, client.bottom);
+    long lastTableEnd = -1;
+    const int radius = MulDiv(8, GetDpiForWindow(m_hWnd), 96);
+    for (int line = firstLine; line < lines; ++line) {
+        const long pos = static_cast<long>(SendMessageW(m_hWnd, EM_LINEINDEX, line, 0));
+        POINTL point{};
+        SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&point), pos);
+        if (point.y > client.bottom) break;
+        if (pos < lastTableEnd) continue;
+        CodeBlockInfo info;
+        if (!GetCodeBlockAt(pos, &info)) continue;
+        lastTableEnd = info.tableEnd;
+        RECT block = GetCodeBlockRect(info);
+        // Mask only the rounded corners. Native RichEdit continues to paint
+        // the text, selection, caret and cell background normally.
+        HRGN outer = CreateRectRgn(block.left - 1, block.top - 1, block.right + 1, block.bottom + 1);
+        HRGN rounded = CreateRoundRectRgn(block.left, block.top, block.right + 1, block.bottom + 1,
+            radius * 2, radius * 2);
+        CombineRgn(outer, outer, rounded, RGN_DIFF);
+        FillRgn(dc, outer, reinterpret_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+        HPEN pen = CreatePen(PS_SOLID, 1, RGB(225, 228, 232));
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, block.left, block.top, block.right, block.bottom, radius * 2, radius * 2);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+        DeleteObject(outer);
+        DeleteObject(rounded);
+    }
+    RestoreDC(dc, saved);
+    ReleaseDC(m_hWnd, dc);
+}
+
 RECT RichEditView::GetCodeBlockRect(const CodeBlockInfo& info) const {
     RECT rc = { 0, 0, 0, 0 };
     if (!m_hWnd || !info.isCodeBlock) return rc;
-
-    // 优先采用 TOM ITextRange2::GetPoint 精确读取当前渲染排版的像素坐标
-    IUnknown* pUnk = nullptr;
-    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
-    if (pUnk) {
-        ITextDocument2* pDoc2 = nullptr;
-        if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
-            ITextRange2* pRange = nullptr;
-            if (SUCCEEDED(pDoc2->Range2(info.tableStart, info.tableEnd, &pRange))) {
-                long top = 0, left = 0, bottom = 0, right = 0;
-                if (SUCCEEDED(pRange->GetPoint(tomStart | TA_TOP | TA_LEFT, &left, &top)) &&
-                    SUCCEEDED(pRange->GetPoint(tomEnd | TA_BOTTOM | TA_RIGHT, &right, &bottom))) {
-                    POINT pt1 = { static_cast<int>(left), static_cast<int>(top) };
-                    POINT pt2 = { static_cast<int>(right), static_cast<int>(bottom) };
-                    ScreenToClient(m_hWnd, &pt1);
-                    ScreenToClient(m_hWnd, &pt2);
-
-                    if (pt2.x > pt1.x && pt2.y > pt1.y) {
-                        rc.left = pt1.x;
-                        rc.top = pt1.y;
-                        rc.right = pt2.x;
-                        rc.bottom = pt2.y;
-                    }
-                }
-                pRange->Release();
+    using Microsoft::WRL::ComPtr;
+    const UINT dpi = std::max(96U, GetDpiForWindow(m_hWnd));
+    long margin = 240, rowWidth = 0;
+    ComPtr<IUnknown> ole;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(ole.GetAddressOf()));
+    ComPtr<ITextDocument2> doc;
+    ComPtr<ITextRange2> range;
+    if (ole && SUCCEEDED(ole.As(&doc))) {
+        ComPtr<ITextRange2> cellRange;
+        ComPtr<ITextRow> row;
+        if (SUCCEEDED(doc->Range2(info.codeStart, info.codeStart, &cellRange)) &&
+            SUCCEEDED(cellRange->GetRow(&row))) {
+            row->Reset(tomRowUpdate);
+            row->GetCellMargin(&margin);
+            long cells = 0;
+            row->GetCellCount(&cells);
+            for (long cell = 0; cell < cells; ++cell) {
+                long width = 0;
+                row->SetCellIndex(cell);
+                if (SUCCEEDED(row->GetCellWidth(&width))) rowWidth += width;
             }
-            pDoc2->Release();
         }
-        pUnk->Release();
+        if (SUCCEEDED(doc->Range2(info.tableStart, info.tableEnd, &range))) {
+            // S_FALSE means no point was returned. Offscreen endpoints still
+            // belong to the same cell and must keep its actual border geometry.
+            const long flags = tomClientCoord | tomAllowOffClient;
+            if (range->GetPoint(tomStart | TA_TOP | TA_LEFT | flags, &rc.left, &rc.top) == S_OK &&
+                range->GetPoint(tomEnd | TA_BOTTOM | TA_RIGHT | flags, &rc.right, &rc.bottom) == S_OK) {
+                rc.left -= MulDiv(margin, dpi, 1440);
+                if (rc.right > rc.left && rc.bottom > rc.top) return rc;
+            }
+        }
     }
 
-    // 后备方案：若 GetPoint 未能成功获取，则结合 EM_POSFROMCHAR 精确回退
-    if (rc.right <= rc.left || rc.bottom <= rc.top) {
-        POINTL ptStart = { 0, 0 };
-        SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptStart), info.tableStart);
-
-        POINTL ptEnd = { 0, 0 };
-        SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptEnd), std::max(info.tableStart, info.tableEnd - 1));
-
-        UINT dpi = GetDpiForWindow(m_hWnd);
-        if (dpi == 0) dpi = 96;
-
-        rc.left = ptStart.x > 0 ? ptStart.x : MulDiv(28, dpi, 96);
-        rc.top = ptStart.y;
-        rc.right = ptEnd.x > rc.left ? ptEnd.x : MulDiv(28, dpi, 96) + MulDiv(8600, dpi, 1440);
-        rc.bottom = ptEnd.y + MulDiv(36, dpi, 96);
+    // EM_POSFROMCHAR also reports the text inset. Reuse the row metadata even
+    // when TOM cannot return the rendered endpoints; negative x is valid while scrolling.
+    POINTL ptStart{}, ptEnd{};
+    SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptStart), info.tableStart);
+    SendMessageW(m_hWnd, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptEnd), std::max(info.tableStart, info.tableEnd - 1));
+    rc.left = ptStart.x - MulDiv(margin, dpi, 1440);
+    rc.top = ptStart.y;
+    if (rowWidth > 0) {
+        // Match TOM's outer edge, including the native one-pixel border.
+        rc.right = rc.left + MulDiv(rowWidth, dpi, 1440) + 1;
+    } else {
+        RECT format;
+        SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+        rc.right = std::max(rc.left + 1, format.right);
     }
+    rc.bottom = ptEnd.y + MulDiv(36, dpi, 96);
 
     return rc;
 }

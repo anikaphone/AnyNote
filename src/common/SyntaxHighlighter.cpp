@@ -177,6 +177,10 @@ const std::unordered_set<std::wstring>& GetShellKeywords() {
 
 std::vector<Token> Tokenize(std::wstring_view text, CodeLanguage lang) {
     std::vector<Token> tokens;
+    if (lang == CodeLanguage::PlainText) {
+        tokens.push_back({TokenType::Default, std::wstring(text)});
+        return tokens;
+    }
     size_t i = 0;
     size_t n = text.size();
 
@@ -305,7 +309,9 @@ void AppendEscapedRtf(std::string& rtf, const std::wstring& text) {
         } else if (wc == L'\r') {
             // 忽略 \r
         } else if (wc == L'\n') {
-            rtf += "\\par\\intbl\\sl240\\slmult1\\sb40\\sa40\\f1\\fs19\\cf3 ";
+            rtf += "\\par\\intbl\\sl300\\slmult1\\sb0\\sa0\\f1\\fs22 ";
+        } else if (wc == L'\t') {
+            rtf += "\\tab ";
         } else if (wc < 128) {
             rtf += static_cast<char>(wc);
         } else {
@@ -340,18 +346,18 @@ std::string SyntaxHighlighter::GenerateRtfCodeBlock(std::wstring_view code, Code
     rtf += "\\viewkind4\\uc1\n";
 
     // 单行单单元格纯净代码卡片 (设置最小行高 720 twips 避免单行卡片过于扁平)
-    rtf += "\\trowd\\trgaph108\\trleft360\\trrh720";
+    rtf += "\\trowd\\trgaph240\\trleft0\\trrh720";
     rtf += "\\clbrdrt\\brdrs\\brdrw15\\brdrcf2";
     rtf += "\\clbrdrb\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clbrdrl\\brdrs\\brdrw40\\brdrcf10";
+    rtf += "\\clbrdrl\\brdrs\\brdrw15\\brdrcf2";
     rtf += "\\clbrdrr\\brdrs\\brdrw15\\brdrcf2";
-    rtf += "\\clcbpat1\\cellx8600\n";
+    rtf += "\\clcbpat1\\clshdng0\\cellx8600\n";
 
     // 单元格内首部嵌入不可见的语言元数据标记 (\\v 为 RTF 隐藏文本，屏幕占用 0 像素)
     const wchar_t* langCode = CodeLanguageToString(lang);
     std::wstring langTag = L"[lang:" + std::wstring(langCode) + L"]";
 
-    rtf += "\\pard\\intbl\\sl240\\slmult1\\sb60\\sa60\\f1\\fs19\\cf3 ";
+    rtf += "\\pard\\intbl\\sl300\\slmult1\\sb200\\sa200\\tx480\\f1\\fs22\\cf3 ";
     rtf += "{\\v ";
     AppendEscapedRtf(rtf, langTag);
     rtf += "\\v0}";
