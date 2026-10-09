@@ -71,6 +71,10 @@ private:
     void UpdateOutline();
     void SyncOutlineSelection();
 
+    // 窗口置顶相关操作
+    void ToggleAlwaysOnTop();
+    void SetAlwaysOnTop(bool enable);
+
     // 多笔记本库相关操作
     void UpdateVaultBarUI();
     void OnNewVault();
@@ -113,6 +117,7 @@ private:
     bool m_isOutlineVisible = false;    // 大纲面板是否显示
     bool m_isFilteringTree = false;     // 是否正在执行树节点过滤
     bool m_isUpdatingOutline = false;   // 是否正在更新大纲
+    bool m_isAlwaysOnTop = false;       // 窗口是否置顶
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
 };

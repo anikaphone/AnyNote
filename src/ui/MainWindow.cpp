@@ -990,6 +990,14 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         CheckMenuItem(hMenu, ID_VIEW_OUTLINE, m_isOutlineVisible ? MF_CHECKED : MF_UNCHECKED);
     }
     m_toolbar.SetOutlineButtonChecked(m_isOutlineVisible);
+
+    m_isAlwaysOnTop = (m_vaultManager.GetConfigString(L"Window", L"AlwaysOnTop", L"0") == L"1");
+    if (m_isAlwaysOnTop) {
+        SetWindowPos(m_hWnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_HELP_ALWAYS_ON_TOP, m_isAlwaysOnTop ? MF_CHECKED : MF_UNCHECKED);
+    }
     m_lastCodeLanguage = LoadLastCodeLanguage();
     bool shouldAddWelcomeNotes = m_vaultManager.IsFirstTimeCreation();
     std::wstring activePath = m_vaultManager.GetActiveVaultPath();
@@ -1762,6 +1770,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        if (cmdId == ID_HELP_ALWAYS_ON_TOP) {
+            ToggleAlwaysOnTop();
+            return 0;
+        }
+
         if (cmdId >= ID_VAULT_SWITCH_BASE && cmdId <= ID_VAULT_SWITCH_MAX) {
             size_t idx = static_cast<size_t>(cmdId - ID_VAULT_SWITCH_BASE);
             const auto* vault = m_vaultManager.GetVault(idx);
@@ -2186,6 +2199,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         SaveActiveNote();
         m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
         m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
+        m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", m_isAlwaysOnTop ? L"1" : L"0");
         if (m_db) {
             m_db->Close();
         }
@@ -2808,6 +2822,30 @@ void MainWindow::SyncOutlineSelection() {
     CHARRANGE cr = {};
     SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
     m_outlinePane.SelectNearestItem(cr.cpMin);
+}
+
+void MainWindow::SetAlwaysOnTop(bool enable) {
+    m_isAlwaysOnTop = enable;
+
+    SetWindowPos(
+        m_hWnd,
+        enable ? HWND_TOPMOST : HWND_NOTOPMOST,
+        0, 0, 0, 0,
+        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE
+    );
+
+    HMENU hMenu = GetMenu(m_hWnd);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_HELP_ALWAYS_ON_TOP,
+            enable ? MF_CHECKED : MF_UNCHECKED);
+    }
+
+    UpdateStatusBar(enable ? L"已开启窗口置顶" : L"已取消窗口置顶");
+    m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", enable ? L"1" : L"0");
+}
+
+void MainWindow::ToggleAlwaysOnTop() {
+    SetAlwaysOnTop(!m_isAlwaysOnTop);
 }
 
 } // namespace anynote::ui

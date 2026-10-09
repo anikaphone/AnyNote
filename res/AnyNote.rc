@@ -86,6 +86,8 @@ BEGIN
 
     POPUP "帮助(&H)"
     BEGIN
+        MENUITEM "窗口置顶(&T)",                  ID_HELP_ALWAYS_ON_TOP
+        MENUITEM SEPARATOR
         MENUITEM "关于 AnyNote(&A)...",          ID_HELP_ABOUT
     END
 END
