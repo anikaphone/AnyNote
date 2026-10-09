@@ -17,51 +17,52 @@ find_package(sqlite3mc CONFIG REQUIRED)
 
 # 源码与资源列表
 set(SOURCES
-    src/main.cpp
-    src/common/Window.cpp
-    src/common/Window.h
-    src/common/StringUtils.h
-    src/common/SyntaxHighlighter.cpp
-    src/common/SyntaxHighlighter.h
-    src/ui/Splitter.cpp
-    src/ui/Splitter.h
-    src/ui/TreeView.cpp
-    src/ui/TreeView.h
-    src/ui/RichEditView.cpp
-    src/ui/RichEditView.h
-    src/ui/TableEditor.cpp
-    src/ui/TableEditor.h
-    src/ui/CodeBlockHoverBar.cpp
-    src/ui/CodeBlockHoverBar.h
-    src/ui/Toolbar.cpp
-    src/ui/Toolbar.h
-    src/ui/FindReplaceDialog.cpp
-    src/ui/FindReplaceDialog.h
-    src/ui/SearchPane.cpp
-    src/ui/SearchPane.h
-    src/ui/NodeSearchBar.cpp
-    src/ui/NodeSearchBar.h
-    src/ui/OutlinePane.cpp
-    src/ui/OutlinePane.h
-    src/ui/MainWindow.cpp
-    src/ui/MainWindow.h
-    src/storage/Database.cpp
-    src/storage/Database.h
-    src/storage/VaultManager.cpp
-    src/storage/VaultManager.h
-    src/storage/NoteModel.h
-    src/storage/NoteRepository.cpp
-    src/storage/NoteRepository.h
-    res/AnyNote.rc
-    res/app.manifest
-    res/resource.h
+    src/AnyNoteClient/main.cpp
+    src/AnyNoteClient/common/Window.cpp
+    src/AnyNoteClient/common/Window.h
+    src/AnyNoteClient/common/StringUtils.h
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.h
+    src/AnyNoteClient/ui/Splitter.cpp
+    src/AnyNoteClient/ui/Splitter.h
+    src/AnyNoteClient/ui/TreeView.cpp
+    src/AnyNoteClient/ui/TreeView.h
+    src/AnyNoteClient/ui/RichEditView.cpp
+    src/AnyNoteClient/ui/RichEditView.h
+    src/AnyNoteClient/ui/TableEditor.cpp
+    src/AnyNoteClient/ui/TableEditor.h
+    src/AnyNoteClient/ui/CodeBlockHoverBar.cpp
+    src/AnyNoteClient/ui/CodeBlockHoverBar.h
+    src/AnyNoteClient/ui/Toolbar.cpp
+    src/AnyNoteClient/ui/Toolbar.h
+    src/AnyNoteClient/ui/FindReplaceDialog.cpp
+    src/AnyNoteClient/ui/FindReplaceDialog.h
+    src/AnyNoteClient/ui/SearchPane.cpp
+    src/AnyNoteClient/ui/SearchPane.h
+    src/AnyNoteClient/ui/NodeSearchBar.cpp
+    src/AnyNoteClient/ui/NodeSearchBar.h
+    src/AnyNoteClient/ui/OutlinePane.cpp
+    src/AnyNoteClient/ui/OutlinePane.h
+    src/AnyNoteClient/ui/MainWindow.cpp
+    src/AnyNoteClient/ui/MainWindow.h
+    src/AnyNoteClient/storage/Database.cpp
+    src/AnyNoteClient/storage/Database.h
+    src/AnyNoteClient/storage/VaultManager.cpp
+    src/AnyNoteClient/storage/VaultManager.h
+    src/AnyNoteClient/storage/NoteModel.h
+    src/AnyNoteClient/storage/NoteRepository.cpp
+    src/AnyNoteClient/storage/NoteRepository.h
+    src/AnyNoteClient/res/AnyNote.rc
+    src/AnyNoteClient/res/app.manifest
+    src/AnyNoteClient/res/resource.h
 )
 
 add_executable(AnyNote WIN32 ${SOURCES})
 
 target_include_directories(AnyNote PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/res
 )
 
 # 链接 sqlite3mc_static 以及 Windows 基础 UI 系统库
@@ -82,17 +83,18 @@ set_property(TARGET AnyNote PROPERTY
 # 单元测试目标
 add_executable(test_storage
     tests/test_storage.cpp
-    src/storage/Database.cpp
-    src/storage/Database.h
-    src/storage/VaultManager.cpp
-    src/storage/VaultManager.h
-    src/storage/NoteModel.h
-    src/storage/NoteRepository.cpp
-    src/storage/NoteRepository.h
-    src/common/SyntaxHighlighter.cpp
-    src/common/SyntaxHighlighter.h
+    src/AnyNoteClient/storage/Database.cpp
+    src/AnyNoteClient/storage/Database.h
+    src/AnyNoteClient/storage/VaultManager.cpp
+    src/AnyNoteClient/storage/VaultManager.h
+    src/AnyNoteClient/storage/NoteModel.h
+    src/AnyNoteClient/storage/NoteRepository.cpp
+    src/AnyNoteClient/storage/NoteRepository.h
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.h
 )
 target_include_directories(test_storage PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_link_libraries(test_storage PRIVATE
@@ -106,12 +108,16 @@ set_property(TARGET test_storage PROPERTY
 # Native editor regression test; uses a scratch window without opening any vault.
 add_executable(test_codeblock_hover
     tests/test_codeblock_hover.cpp
-    src/ui/RichEditView.cpp
-    src/ui/TableEditor.cpp
-    src/ui/CodeBlockHoverBar.cpp
-    src/common/SyntaxHighlighter.cpp
+    src/AnyNoteClient/ui/RichEditView.cpp
+    src/AnyNoteClient/ui/TableEditor.cpp
+    src/AnyNoteClient/ui/CodeBlockHoverBar.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp
 )
-target_include_directories(test_codeblock_hover PRIVATE src res)
+target_include_directories(test_codeblock_hover PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(test_codeblock_hover PRIVATE comctl32 ole32 gdiplus)
 set_property(TARGET test_codeblock_hover PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
@@ -120,12 +126,16 @@ set_property(TARGET test_codeblock_hover PROPERTY
 # Table selection and alignment regression test using a real RichEdit window.
 add_executable(test_table_editing
     tests/test_table_editing.cpp
-    src/ui/RichEditView.cpp
-    src/ui/TableEditor.cpp
-    src/ui/CodeBlockHoverBar.cpp
-    src/common/SyntaxHighlighter.cpp
+    src/AnyNoteClient/ui/RichEditView.cpp
+    src/AnyNoteClient/ui/TableEditor.cpp
+    src/AnyNoteClient/ui/CodeBlockHoverBar.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp
 )
-target_include_directories(test_table_editing PRIVATE src res)
+target_include_directories(test_table_editing PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(test_table_editing PRIVATE comctl32 ole32 gdiplus)
 set_property(TARGET test_table_editing PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
@@ -133,9 +143,13 @@ set_property(TARGET test_table_editing PROPERTY
 
 # Exercise tree filtering and global navigation through the real window handlers.
 set(NODE_SEARCH_TEST_SOURCES ${SOURCES})
-list(REMOVE_ITEM NODE_SEARCH_TEST_SOURCES src/main.cpp)
+list(REMOVE_ITEM NODE_SEARCH_TEST_SOURCES src/AnyNoteClient/main.cpp)
 add_executable(test_node_search tests/test_node_search.cpp ${NODE_SEARCH_TEST_SOURCES})
-target_include_directories(test_node_search PRIVATE src res)
+target_include_directories(test_node_search PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(test_node_search PRIVATE
     sqlite3mc::sqlite3mc_static comctl32 ole32 uxtheme shlwapi gdiplus
 )
@@ -146,27 +160,29 @@ set_property(TARGET test_node_search PROPERTY
 # Outline view extraction and navigation regression test
 add_executable(test_outline
     tests/test_outline.cpp
-    src/ui/OutlinePane.cpp
-    src/ui/OutlinePane.h
-    src/ui/RichEditView.cpp
-    src/ui/RichEditView.h
-    src/ui/TreeView.cpp
-    src/ui/TreeView.h
-    src/ui/TableEditor.cpp
-    src/ui/TableEditor.h
-    src/ui/CodeBlockHoverBar.cpp
-    src/ui/CodeBlockHoverBar.h
-    src/common/SyntaxHighlighter.cpp
-    src/common/SyntaxHighlighter.h
-    src/common/Window.cpp
-    src/common/Window.h
+    src/AnyNoteClient/ui/OutlinePane.cpp
+    src/AnyNoteClient/ui/OutlinePane.h
+    src/AnyNoteClient/ui/RichEditView.cpp
+    src/AnyNoteClient/ui/RichEditView.h
+    src/AnyNoteClient/ui/TreeView.cpp
+    src/AnyNoteClient/ui/TreeView.h
+    src/AnyNoteClient/ui/TableEditor.cpp
+    src/AnyNoteClient/ui/TableEditor.h
+    src/AnyNoteClient/ui/CodeBlockHoverBar.cpp
+    src/AnyNoteClient/ui/CodeBlockHoverBar.h
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.h
+    src/AnyNoteClient/common/Window.cpp
+    src/AnyNoteClient/common/Window.h
 )
-target_include_directories(test_outline PRIVATE src res)
+target_include_directories(test_outline PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
 target_link_libraries(test_outline PRIVATE
     comctl32 ole32 uxtheme shlwapi gdiplus
 )
 set_property(TARGET test_outline PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
-
-
