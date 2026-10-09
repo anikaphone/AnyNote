@@ -11,6 +11,7 @@
 #include <tom.h>
 #include <wrl/client.h>
 
+
 namespace anynote::ui {
 
 namespace {
@@ -71,6 +72,8 @@ DWORD CALLBACK StreamOutCallback(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG cb, LON
 
 static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
     auto* pThis = reinterpret_cast<RichEditView*>(dwRefData);
+    LRESULT tableResult = 0;
+    if (pThis && pThis->HandleTableMessage(uMsg, wParam, lParam, tableResult)) return tableResult;
     if (uMsg == WM_KEYDOWN && wParam == VK_TAB && pThis) {
         if (pThis->GetCodeBlockAtCursor()) {
             SendMessageW(hWnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"    "));
@@ -120,7 +123,8 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
             ScreenToClient(hWnd, &ptClient);
             POINTL ptl = { ptClient.x, ptClient.y };
             LRESULT charPos = SendMessageW(hWnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl));
-            if (charPos >= 0) {
+            if (charPos >= 0 && (!pThis || !pThis->HasTableSelection() ||
+                !pThis->IsPointInTableSelection(ptClient))) {
                 CHARRANGE cr = {};
                 SendMessageW(hWnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
                 if (charPos < cr.cpMin || charPos > cr.cpMax) {
@@ -162,6 +166,7 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
             RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
     }
     if (uMsg == WM_PAINT && pThis) pThis->PaintCodeBlockFrames();
+    if (uMsg == WM_PAINT && pThis) pThis->PaintTableSelection();
     if (shouldUpdateHoverBar) {
         pThis->UpdateHoverBarPosition();
     }
@@ -221,6 +226,18 @@ RichEditView::~RichEditView() {
     }
 }
 
+bool RichEditView::HandleTableMessage(UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result) {
+    if (message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK) {
+        POINTL point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        const long cp = static_cast<long>(SendMessageW(m_hWnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&point)));
+        if (GetCodeBlockAt(cp)) {
+            m_tableEditor.ClearSelection();
+            return false;
+        }
+    }
+    return m_tableEditor.HandleMessage(message, wParam, lParam, result);
+}
+
 bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height, UINT controlId) {
     if (m_hWnd) {
         return false;
@@ -253,6 +270,7 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
     }
 
     m_richEditModule = richEditModule;
+    m_tableEditor.Attach(m_hWnd);
 
     // 挂载子类化过程以处理标题回车换行自动恢复正文
     SetWindowSubclass(m_hWnd, RichEditSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
@@ -1291,7 +1309,64 @@ bool RichEditView::IsCursorInTable() const {
     if (!m_hWnd) return false;
     PARAFORMAT2 pf{ sizeof(PARAFORMAT2) };
     SendMessageW(m_hWnd, EM_GETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&pf));
-    return (pf.dwMask & PFM_TABLE) && (pf.wEffects & PFE_TABLE);
+    if ((pf.dwMask & PFM_TABLE) && (pf.wEffects & PFE_TABLE)) return true;
+
+    // 当选区跨单元格、选中整个表格或光标在表格边界时，EM_GETPARAFORMAT 可能未直接置位 PFM_TABLE
+    // 通过 TOM 检查选区/光标是否处于表格范围内
+    IUnknown* pUnk = nullptr;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
+    if (pUnk) {
+        ITextDocument2* pDoc2 = nullptr;
+        bool inTable = false;
+        if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+            ITextSelection* pSel = nullptr;
+            if (SUCCEEDED(pDoc2->GetSelection(&pSel)) && pSel) {
+                long selMin = 0, selMax = 0;
+                pSel->GetStart(&selMin);
+                pSel->GetEnd(&selMax);
+                ITextRange2* pRange = nullptr;
+                if (SUCCEEDED(pDoc2->Range2(selMin, selMin, &pRange)) && pRange) {
+                    long delta = 0;
+                    if (SUCCEEDED(pRange->Expand(tomTable, &delta)) && delta != 0) {
+                        inTable = true;
+                    }
+                    pRange->Release();
+                }
+                if (!inTable && selMax > selMin) {
+                    ITextRange2* pRangeMax = nullptr;
+                    if (SUCCEEDED(pDoc2->Range2(selMax, selMax, &pRangeMax)) && pRangeMax) {
+                        long delta = 0;
+                        if (SUCCEEDED(pRangeMax->Expand(tomTable, &delta)) && delta != 0) {
+                            inTable = true;
+                        }
+                        pRangeMax->Release();
+                    }
+                }
+                if (!inTable && selMax > selMin) {
+                    ITextRange* pScanRange = nullptr;
+                    if (SUCCEEDED(pDoc2->Range(selMin, selMax, &pScanRange)) && pScanRange) {
+                        BSTR scanText = nullptr;
+                        if (SUCCEEDED(pScanRange->GetText(&scanText)) && scanText) {
+                            int scanLen = SysStringLen(scanText);
+                            for (int k = 0; k < scanLen; ++k) {
+                                if (static_cast<unsigned short>(scanText[k]) == 0xfff9) {
+                                    inTable = true;
+                                    break;
+                                }
+                            }
+                            SysFreeString(scanText);
+                        }
+                        pScanRange->Release();
+                    }
+                }
+                pSel->Release();
+            }
+            pDoc2->Release();
+        }
+        pUnk->Release();
+        if (inTable) return true;
+    }
+    return false;
 }
 
 bool RichEditView::InsertTable(int rows, int cols) {
@@ -1317,6 +1392,7 @@ bool RichEditView::InsertTable(int rows, int cols) {
                 if (SUCCEEDED(pRange2->GetRow(&pRow))) {
                     pRow->SetIndent(144);
                     pRow->SetCellCount(cols);
+                    pRow->SetHeight(720);
                     int perColWidth = std::max(1200, 7200 / cols);
                     for (int c = 0; c < cols; ++c) {
                         pRow->SetCellIndex(c);
@@ -1369,6 +1445,7 @@ bool RichEditView::NavigateTableCell(bool forward) {
 
 bool RichEditView::InsertTableRow(bool below) {
     if (!m_hWnd || !IsCursorInTable()) return false;
+    m_tableEditor.ClearSelection();
     IUnknown* pUnk = nullptr;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
     if (!pUnk) return false;
@@ -1414,6 +1491,7 @@ bool RichEditView::InsertTableRow(bool below) {
                 if (SUCCEEDED(pInsRange->GetRow(&pRow))) {
                     pRow->SetIndent(144);
                     pRow->SetCellCount(numCells);
+                    pRow->SetHeight(720);
                     int perColWidth = std::max(1200, 7200 / numCells);
                     for (int c = 0; c < numCells; ++c) {
                         pRow->SetCellIndex(c);
@@ -1442,6 +1520,7 @@ bool RichEditView::InsertTableRow(bool below) {
 
 bool RichEditView::DeleteTableRow() {
     if (!m_hWnd || !IsCursorInTable()) return false;
+    m_tableEditor.ClearSelection();
     IUnknown* pUnk = nullptr;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
     if (!pUnk) return false;
@@ -1518,6 +1597,7 @@ bool RichEditView::DeleteTableRow() {
 
 bool RichEditView::DeleteTable() {
     if (!m_hWnd || !IsCursorInTable()) return false;
+    m_tableEditor.ClearSelection();
     IUnknown* pUnk = nullptr;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
     if (!pUnk) return false;
@@ -1542,6 +1622,7 @@ bool RichEditView::DeleteTable() {
 
 bool RichEditView::InsertTableColumn(bool right) {
     if (!m_hWnd || !IsCursorInTable()) return false;
+    m_tableEditor.ClearSelection();
     IUnknown* pUnk = nullptr;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
     if (!pUnk) return false;
@@ -1597,6 +1678,7 @@ bool RichEditView::InsertTableColumn(bool right) {
 
 bool RichEditView::DeleteTableColumn() {
     if (!m_hWnd || !IsCursorInTable()) return false;
+    m_tableEditor.ClearSelection();
     IUnknown* pUnk = nullptr;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(&pUnk));
     if (!pUnk) return false;
@@ -1650,6 +1732,21 @@ bool RichEditView::DeleteTableColumn() {
     return ok;
 }
 
+bool RichEditView::SetTableCellHorizontalAlignment(int horzAlign, TableAlignmentScope scope) {
+    const bool ok = m_tableEditor.SetAlignment(horzAlign, false, scope);
+    if (ok) PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
+    return ok;
+}
+
+bool RichEditView::SetTableCellVerticalAlignment(int vertAlign, TableAlignmentScope scope) {
+    const bool ok = m_tableEditor.SetAlignment(vertAlign, true, scope);
+    if (ok) PostMessageW(GetParent(m_hWnd), WM_EDITOR_FORMAT_CHANGED, 0, 0);
+    return ok;
+}
+
+bool RichEditView::GetTableCellAlignment(int* pHorzAlign, int* pVertAlign) const {
+    return m_tableEditor.GetAlignment(pHorzAlign, pVertAlign);
+}
 
 void RichEditView::Undo() {
     if (m_hWnd) SendMessageW(m_hWnd, EM_UNDO, 0, 0);

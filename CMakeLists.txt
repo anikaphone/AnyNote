@@ -29,6 +29,8 @@ set(SOURCES
     src/ui/TreeView.h
     src/ui/RichEditView.cpp
     src/ui/RichEditView.h
+    src/ui/TableEditor.cpp
+    src/ui/TableEditor.h
     src/ui/CodeBlockHoverBar.cpp
     src/ui/CodeBlockHoverBar.h
     src/ui/Toolbar.cpp
@@ -103,12 +105,27 @@ set_property(TARGET test_storage PROPERTY
 add_executable(test_codeblock_hover
     tests/test_codeblock_hover.cpp
     src/ui/RichEditView.cpp
+    src/ui/TableEditor.cpp
     src/ui/CodeBlockHoverBar.cpp
     src/common/SyntaxHighlighter.cpp
 )
 target_include_directories(test_codeblock_hover PRIVATE src res)
 target_link_libraries(test_codeblock_hover PRIVATE comctl32 ole32 gdiplus)
 set_property(TARGET test_codeblock_hover PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+# Table selection and alignment regression test using a real RichEdit window.
+add_executable(test_table_editing
+    tests/test_table_editing.cpp
+    src/ui/RichEditView.cpp
+    src/ui/TableEditor.cpp
+    src/ui/CodeBlockHoverBar.cpp
+    src/common/SyntaxHighlighter.cpp
+)
+target_include_directories(test_table_editing PRIVATE src res)
+target_link_libraries(test_table_editing PRIVATE comctl32 ole32 gdiplus)
+set_property(TARGET test_table_editing PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 

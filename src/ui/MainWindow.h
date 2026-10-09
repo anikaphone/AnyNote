@@ -26,6 +26,8 @@ public:
     std::wstring GetActiveVaultDisplayName() const { return m_vaultManager.GetActiveVaultDisplayName(); }
     void ShowVaultMenu();
     bool SwitchToVault(const std::wstring& path, bool createIfMissing = false);
+    RichEditView& GetRichEditView() noexcept { return m_richEditView; }
+    const RichEditView& GetRichEditView() const noexcept { return m_richEditView; }
 
     static const wchar_t* GetClassName() { return L"AnyNoteMainWindow"; }
     static void RegisterClassIfNeeded(HINSTANCE hInstance);

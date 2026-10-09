@@ -2,6 +2,7 @@
 
 #include "common/SyntaxHighlighter.h"
 #include "ui/CodeBlockHoverBar.h"
+#include "ui/TableEditor.h"
 #include <windows.h>
 #include <richedit.h>
 #include <string>
@@ -80,6 +81,8 @@ public:
     void PaintCodeBlockFrames();
 
     // 表格操作 (插入 3*2 表格、行列调整、删除、单元格导航)
+    using TableAlignmentScope = anynote::ui::TableAlignmentScope;
+
     bool InsertTable(int rows = 2, int cols = 3);
     bool IsCursorInTable() const;
     bool InsertTableRow(bool below = true);
@@ -88,6 +91,16 @@ public:
     bool DeleteTableColumn();
     bool DeleteTable();
     bool NavigateTableCell(bool forward = true);
+    bool SetTableCellHorizontalAlignment(int horzAlign, TableAlignmentScope scope = TableAlignmentScope::Selection);
+    bool SetTableCellVerticalAlignment(int vertAlign, TableAlignmentScope scope = TableAlignmentScope::Selection);
+    bool GetTableCellAlignment(int* pHorzAlign, int* pVertAlign) const;
+    bool SelectTableCells(TableAlignmentScope scope) { return m_tableEditor.Select(scope); }
+    size_t GetSelectedTableCellCount() const { return m_tableEditor.SelectionCount(); }
+    bool HasTableSelection() const { return m_tableEditor.HasSelection(); }
+    void ClearTableSelection() { m_tableEditor.ClearSelection(); }
+    bool HandleTableMessage(UINT message, WPARAM wParam, LPARAM lParam, LRESULT& result);
+    bool IsPointInTableSelection(POINT point) const { return m_tableEditor.ContainsPoint(point); }
+    void PaintTableSelection() const { m_tableEditor.PaintSelection(); }
 
     // 剪贴板与编辑
     void Undo();
@@ -112,6 +125,7 @@ private:
     HWND m_hWnd = nullptr;
     HMODULE m_richEditModule = nullptr;
     CodeBlockHoverBar m_hoverBar;
+    TableEditor m_tableEditor;
     std::vector<CHARRANGE> m_markedRanges;
     std::vector<CHARFORMAT2W> m_markedFormats;
 

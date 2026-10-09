@@ -2,6 +2,7 @@
 #include "resource.h"
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
+#include <tom.h>
 #include <commctrl.h>
 #include <uxtheme.h>
 #include <windowsx.h>
@@ -18,6 +19,8 @@
 #include <vector>
 
 namespace anynote::ui {
+
+using TableAlignmentScope = RichEditView::TableAlignmentScope;
 
 namespace {
 
@@ -1879,6 +1882,86 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             m_richEditView.DeleteTable();
             return 0;
 
+        // 单元格对齐 (当前/选区)
+        case ID_TABLE_ALIGN_LEFT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_LEFT, TableAlignmentScope::Selection);
+            return 0;
+        case ID_TABLE_ALIGN_CENTER:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_CENTER, TableAlignmentScope::Selection);
+            return 0;
+        case ID_TABLE_ALIGN_RIGHT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_RIGHT, TableAlignmentScope::Selection);
+            return 0;
+        case ID_TABLE_VALIGN_TOP:
+            m_richEditView.SetTableCellVerticalAlignment(0, TableAlignmentScope::Selection);
+            return 0;
+        case ID_TABLE_VALIGN_CENTER:
+            m_richEditView.SetTableCellVerticalAlignment(1, TableAlignmentScope::Selection);
+            return 0;
+        case ID_TABLE_VALIGN_BOTTOM:
+            m_richEditView.SetTableCellVerticalAlignment(2, TableAlignmentScope::Selection);
+            return 0;
+
+        // 整列对齐
+        case ID_TABLE_COL_ALIGN_LEFT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_LEFT, TableAlignmentScope::Column);
+            return 0;
+        case ID_TABLE_COL_ALIGN_CENTER:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_CENTER, TableAlignmentScope::Column);
+            return 0;
+        case ID_TABLE_COL_ALIGN_RIGHT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_RIGHT, TableAlignmentScope::Column);
+            return 0;
+        case ID_TABLE_COL_VALIGN_TOP:
+            m_richEditView.SetTableCellVerticalAlignment(0, TableAlignmentScope::Column);
+            return 0;
+        case ID_TABLE_COL_VALIGN_CENTER:
+            m_richEditView.SetTableCellVerticalAlignment(1, TableAlignmentScope::Column);
+            return 0;
+        case ID_TABLE_COL_VALIGN_BOTTOM:
+            m_richEditView.SetTableCellVerticalAlignment(2, TableAlignmentScope::Column);
+            return 0;
+
+        // 整行对齐
+        case ID_TABLE_ROW_ALIGN_LEFT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_LEFT, TableAlignmentScope::Row);
+            return 0;
+        case ID_TABLE_ROW_ALIGN_CENTER:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_CENTER, TableAlignmentScope::Row);
+            return 0;
+        case ID_TABLE_ROW_ALIGN_RIGHT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_RIGHT, TableAlignmentScope::Row);
+            return 0;
+        case ID_TABLE_ROW_VALIGN_TOP:
+            m_richEditView.SetTableCellVerticalAlignment(0, TableAlignmentScope::Row);
+            return 0;
+        case ID_TABLE_ROW_VALIGN_CENTER:
+            m_richEditView.SetTableCellVerticalAlignment(1, TableAlignmentScope::Row);
+            return 0;
+        case ID_TABLE_ROW_VALIGN_BOTTOM:
+            m_richEditView.SetTableCellVerticalAlignment(2, TableAlignmentScope::Row);
+            return 0;
+
+        // 全表单元格对齐
+        case ID_TABLE_ALL_ALIGN_LEFT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_LEFT, TableAlignmentScope::All);
+            return 0;
+        case ID_TABLE_ALL_ALIGN_CENTER:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_CENTER, TableAlignmentScope::All);
+            return 0;
+        case ID_TABLE_ALL_ALIGN_RIGHT:
+            m_richEditView.SetTableCellHorizontalAlignment(PFA_RIGHT, TableAlignmentScope::All);
+            return 0;
+        case ID_TABLE_ALL_VALIGN_TOP:
+            m_richEditView.SetTableCellVerticalAlignment(0, TableAlignmentScope::All);
+            return 0;
+        case ID_TABLE_ALL_VALIGN_CENTER:
+            m_richEditView.SetTableCellVerticalAlignment(1, TableAlignmentScope::All);
+            return 0;
+        case ID_TABLE_ALL_VALIGN_BOTTOM:
+            m_richEditView.SetTableCellVerticalAlignment(2, TableAlignmentScope::All);
+            return 0;
+
         // 插入图片
         case ID_INSERT_IMAGE:
             OnInsertImageFromFile();
@@ -2188,6 +2271,21 @@ void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
         ptScreen.x = ptl.x;
         ptScreen.y = ptl.y + 20;
         ClientToScreen(m_richEditView.GetHwnd(), &ptScreen);
+    } else {
+        POINT ptClient = ptScreen;
+        ScreenToClient(m_richEditView.GetHwnd(), &ptClient);
+        POINTL ptl = { ptClient.x, ptClient.y };
+        LRESULT charIdx = SendMessageW(m_richEditView.GetHwnd(), EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl));
+        if (charIdx >= 0) {
+            CHARRANGE curSel = {};
+            SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&curSel));
+            const bool keepTableSelection = m_richEditView.HasTableSelection() &&
+                m_richEditView.IsPointInTableSelection(ptClient);
+            if (!keepTableSelection && (curSel.cpMin == curSel.cpMax || charIdx < curSel.cpMin || charIdx > curSel.cpMax)) {
+                CHARRANGE clickSel = { static_cast<LONG>(charIdx), static_cast<LONG>(charIdx) };
+                SendMessageW(m_richEditView.GetHwnd(), EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&clickSel));
+            }
+        }
     }
 
     HMENU hMenu = CreatePopupMenu();
@@ -2262,6 +2360,30 @@ void MainWindow::ShowEditorContextMenu(int xScreen, int yScreen) {
             AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_COL, L"删除当前列(&C)");
             AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(hSubTable, MF_STRING, ID_TABLE_DELETE_TABLE, L"删除表格(&T)");
+            AppendMenuW(hSubTable, MF_SEPARATOR, 0, nullptr);
+
+            // 统一的表格对齐菜单：拖选矩形或 Ctrl 多选后只对选中单元格生效。
+            int curHorz = PFA_LEFT;
+            int curVert = 0;
+            m_richEditView.GetTableCellAlignment(&curHorz, &curVert);
+
+            HMENU hSubCellAlign = CreatePopupMenu();
+            UINT flagHLeft   = MF_STRING | (curHorz == PFA_LEFT   ? MF_CHECKED : MF_UNCHECKED);
+            UINT flagHCenter = MF_STRING | (curHorz == PFA_CENTER ? MF_CHECKED : MF_UNCHECKED);
+            UINT flagHRight  = MF_STRING | (curHorz == PFA_RIGHT  ? MF_CHECKED : MF_UNCHECKED);
+            AppendMenuW(hSubCellAlign, flagHLeft,   ID_TABLE_ALIGN_LEFT,   L"水平左对齐(&L)");
+            AppendMenuW(hSubCellAlign, flagHCenter, ID_TABLE_ALIGN_CENTER, L"水平居中(&C)");
+            AppendMenuW(hSubCellAlign, flagHRight,  ID_TABLE_ALIGN_RIGHT,  L"水平右对齐(&R)");
+            AppendMenuW(hSubCellAlign, MF_SEPARATOR, 0, nullptr);
+            UINT flagVTop    = MF_STRING | (curVert == 0 ? MF_CHECKED : MF_UNCHECKED);
+            UINT flagVMiddle = MF_STRING | (curVert == 1 ? MF_CHECKED : MF_UNCHECKED);
+            UINT flagVBottom = MF_STRING | (curVert == 2 ? MF_CHECKED : MF_UNCHECKED);
+            AppendMenuW(hSubCellAlign, flagVTop,    ID_TABLE_VALIGN_TOP,    L"顶端对齐(&T)");
+            AppendMenuW(hSubCellAlign, flagVMiddle, ID_TABLE_VALIGN_CENTER, L"垂直居中(&M)");
+            AppendMenuW(hSubCellAlign, flagVBottom, ID_TABLE_VALIGN_BOTTOM, L"底端对齐(&B)");
+            AppendMenuW(hSubTable, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubCellAlign), L"对齐");
+
+
             AppendMenuW(hMenu, MF_POPUP, reinterpret_cast<UINT_PTR>(hSubTable), L"表格(&B)");
         } else {
             AppendMenuW(hMenu, MF_STRING, ID_INSERT_TABLE, L"插入表格(3×2)(&T)\tCtrl+Shift+T");
