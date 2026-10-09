@@ -25,6 +25,15 @@ struct CodeBlockInfo {
     std::wstring codeText;
 };
 
+struct OutlineItem {
+    int level = 0;          // 1 ~ 4
+    std::wstring text;      // 标题文本
+    LONG charPos = 0;       // 字符起始偏移
+    LONG lineIndex = 0;     // 所在行号
+
+    bool operator==(const OutlineItem& other) const = default;
+};
+
 class RichEditView {
 public:
     RichEditView() = default;
@@ -47,6 +56,8 @@ public:
     // 富文本样式操作
     void ApplyHeading(int level);
     int GetCurrentHeadingLevel() const;
+    std::vector<OutlineItem> ExtractOutlineItems() const;
+    void ScrollToCharPos(LONG charPos);
 
     void ToggleBold();
     void ToggleItalic();

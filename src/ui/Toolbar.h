@@ -20,6 +20,8 @@ public:
     void SetSelectedHeadingIndex(int index);
     int GetSelectedHeadingIndex() const;
 
+    void SetOutlineButtonChecked(bool checked);
+
 private:
     HWND m_hWnd = nullptr;
     HWND m_hParent = nullptr;

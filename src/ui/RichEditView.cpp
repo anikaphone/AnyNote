@@ -543,6 +543,113 @@ int RichEditView::GetCurrentHeadingLevel() const {
     return 0;
 }
 
+std::vector<OutlineItem> RichEditView::ExtractOutlineItems() const {
+    if (!m_hWnd) return {};
+
+    Microsoft::WRL::ComPtr<IUnknown> pUnk;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(pUnk.GetAddressOf()));
+    if (!pUnk) return {};
+
+    Microsoft::WRL::ComPtr<ITextDocument> pDoc;
+    if (FAILED(pUnk.As(&pDoc)) || !pDoc) return {};
+
+    GETTEXTLENGTHEX lengthInfo = {};
+    lengthInfo.flags = GTL_PRECISE | GTL_NUMCHARS;
+    lengthInfo.codepage = 1200;
+    LONG length = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTLENGTHEX,
+        reinterpret_cast<WPARAM>(&lengthInfo), 0));
+    if (length <= 0) return {};
+
+    std::wstring text(static_cast<size_t>(length) + 1, L'\0');
+    GETTEXTEX textInfo = {};
+    textInfo.cb = static_cast<DWORD>(text.size() * sizeof(wchar_t));
+    textInfo.flags = GT_RAWTEXT;
+    textInfo.codepage = 1200;
+    LONG copied = static_cast<LONG>(SendMessageW(m_hWnd, EM_GETTEXTEX,
+        reinterpret_cast<WPARAM>(&textInfo), reinterpret_cast<LPARAM>(text.data())));
+    text.resize(static_cast<size_t>(copied));
+    if (text.empty()) return {};
+
+    Microsoft::WRL::ComPtr<ITextRange> pRange;
+    if (FAILED(pDoc->Range(0, 0, &pRange)) || !pRange) return {};
+
+    std::vector<OutlineItem> items;
+    LONG segStart = 0;
+    LONG totalLen = static_cast<LONG>(text.size());
+
+    while (segStart < totalLen) {
+        LONG segEnd = segStart;
+        while (segEnd < totalLen && text[segEnd] != L'\r' && text[segEnd] != L'\n') {
+            segEnd++;
+        }
+
+        LONG nonSpaceStart = segStart;
+        while (nonSpaceStart < segEnd && (text[nonSpaceStart] == L' ' || text[nonSpaceStart] == L'\t')) {
+            nonSpaceStart++;
+        }
+        LONG nonSpaceEnd = segEnd;
+        while (nonSpaceEnd > nonSpaceStart && (text[nonSpaceEnd - 1] == L' ' || text[nonSpaceEnd - 1] == L'\t')) {
+            nonSpaceEnd--;
+        }
+
+        if (nonSpaceEnd > nonSpaceStart) {
+            pRange->SetRange(nonSpaceStart, nonSpaceStart + 1);
+
+            Microsoft::WRL::ComPtr<ITextFont> pFont;
+            if (SUCCEEDED(pRange->GetFont(&pFont)) && pFont) {
+                float ptSize = 0.0f;
+                pFont->GetSize(&ptSize);
+                long bold = tomFalse;
+                pFont->GetBold(&bold);
+
+                int level = 0;
+                if (ptSize >= 16.5f) {
+                    level = 1;
+                } else if (ptSize >= 14.0f) {
+                    level = 2;
+                } else if (ptSize >= 12.5f) {
+                    level = 3;
+                } else if (ptSize <= 11.8f && bold == tomTrue && ptSize > 0.0f) {
+                    Microsoft::WRL::ComPtr<ITextPara> pPara;
+                    if (SUCCEEDED(pRange->GetPara(&pPara)) && pPara) {
+                        float spaceBefore = 0.0f;
+                        pPara->GetSpaceBefore(&spaceBefore);
+                        if (spaceBefore > 0.0f) {
+                            level = 4;
+                        }
+                    }
+                }
+
+                if (level >= 1 && level <= 4) {
+                    std::wstring titleText = text.substr(nonSpaceStart, nonSpaceEnd - nonSpaceStart);
+                    if (!titleText.empty() && titleText.rfind(L"[lang:", 0) != 0) {
+                        LRESULT lineIdx = SendMessageW(m_hWnd, EM_EXLINEFROMCHAR, 0, segStart);
+                        items.push_back({ level, std::move(titleText), segStart, static_cast<LONG>(lineIdx) });
+                    }
+                }
+            }
+        }
+
+        if (segEnd < totalLen && text[segEnd] == L'\r') {
+            segEnd++;
+        }
+        if (segEnd < totalLen && text[segEnd] == L'\n') {
+            segEnd++;
+        }
+        segStart = segEnd;
+    }
+
+    return items;
+}
+
+void RichEditView::ScrollToCharPos(LONG charPos) {
+    if (!m_hWnd) return;
+    CHARRANGE cr = { charPos, charPos };
+    SendMessageW(m_hWnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    SendMessageW(m_hWnd, EM_SCROLLCARET, 0, 0);
+    SetFocus(m_hWnd);
+}
+
 void RichEditView::ToggleBold() {
     if (!m_hWnd) return;
     CHARFORMAT2W cf = {sizeof(CHARFORMAT2W)};

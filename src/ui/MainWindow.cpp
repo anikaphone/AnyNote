@@ -968,8 +968,28 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
         ShowNodeSearch(false);
     });
 
+    // 7.2 初始化右侧文档大纲面板与垂直分割条
+    m_outlineSplitter.Initialize(m_hWnd, 0, toolbarH, clientH - toolbarH - statusbarH, false);
+    m_outlinePane.Initialize(m_hWnd);
+    m_outlinePane.SetOnItemSelected([this](LONG charPos) {
+        m_richEditView.ScrollToCharPos(charPos);
+    });
+    m_outlinePane.SetOnClose([this]() {
+        ShowOutlinePane(false);
+    });
+
     // 8. 加载多库配置并打开活动库 (若失效则优雅回退；仅当首次无任何库时填充欢迎笔记)
     m_vaultManager.Load();
+    m_isOutlineVisible = (m_vaultManager.GetConfigString(L"View", L"OutlineVisible", L"0") == L"1");
+    std::wstring outlineWStr = m_vaultManager.GetConfigString(L"View", L"OutlineWidth", L"220");
+    if (!outlineWStr.empty()) {
+        try { m_outlineWidth = std::clamp(std::stoi(outlineWStr), 140, 600); } catch (...) {}
+    }
+    hMenu = GetMenu(m_hWnd);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_VIEW_OUTLINE, m_isOutlineVisible ? MF_CHECKED : MF_UNCHECKED);
+    }
+    m_toolbar.SetOutlineButtonChecked(m_isOutlineVisible);
     m_lastCodeLanguage = LoadLastCodeLanguage();
     bool shouldAddWelcomeNotes = m_vaultManager.IsFirstTimeCreation();
     std::wstring activePath = m_vaultManager.GetActiveVaultPath();
@@ -1032,7 +1052,17 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
     m_splitter.SetBounds(m_splitterPos, toolbarH, 5, workH);
 
     int editorX = m_splitterPos + 5;
-    int editorW = std::max(50, clientWidth - editorX);
+
+    int outlineAreaW = 0;
+    if (m_isOutlineVisible) {
+        int maxOutlineW = std::max(140, clientWidth - editorX - 150);
+        m_outlineWidth = std::clamp(m_outlineWidth, 140, maxOutlineW);
+        outlineAreaW = m_outlineWidth + 5;
+    }
+
+    int editorW = std::max(50, clientWidth - editorX - outlineAreaW);
+    int outlineSplitterX = editorX + editorW;
+    int outlinePaneX = outlineSplitterX + 5;
 
     if (m_isSearchPaneVisible) {
         const int splitterH = 5;
@@ -1053,6 +1083,16 @@ void MainWindow::LayoutChildren(int clientWidth, int clientHeight) {
         m_richEditView.SetBounds(editorX, toolbarH, editorW, workH);
         ShowWindow(m_searchSplitter.GetHwnd(), SW_HIDE);
         ShowWindow(m_searchPane.GetHwnd(), SW_HIDE);
+    }
+
+    if (m_isOutlineVisible) {
+        m_outlineSplitter.SetBounds(outlineSplitterX, toolbarH, 5, workH);
+        m_outlinePane.SetBounds(outlinePaneX, toolbarH, m_outlineWidth, workH);
+        ShowWindow(m_outlineSplitter.GetHwnd(), SW_SHOW);
+        ShowWindow(m_outlinePane.GetHwnd(), SW_SHOW);
+    } else {
+        ShowWindow(m_outlineSplitter.GetHwnd(), SW_HIDE);
+        ShowWindow(m_outlinePane.GetHwnd(), SW_HIDE);
     }
 
     if (m_hStatusBar) {
@@ -1229,6 +1269,7 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
     auto nodes = m_repo->GetAllNodes();
     if (nodes.empty()) {
         m_richEditView.SetText(L"");
+        m_outlinePane.ClearOutline();
         UpdateStatusBar(L"就绪 | 当前笔记本库为空，可在目录树右键或按 Ctrl+N 新建笔记");
         return;
     }
@@ -1312,6 +1353,7 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
     } else {
         m_richEditView.SetText(L"");
     }
+    UpdateOutline();
 }
 
 void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
@@ -1325,6 +1367,7 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
             m_richEditView.SetText(L"");
         }
         m_activeNoteId = 0;
+        m_outlinePane.ClearOutline();
         UpdateStatusBar(L"未选择笔记");
         return;
     }
@@ -1360,6 +1403,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_EDITOR_FORMAT_CHANGED:
         m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
+        UpdateOutline();
         return 0;
 
     case WM_CONTEXTMENU: {
@@ -1405,6 +1449,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             int clientH = rc.bottom - rc.top;
             int newPaneH = (clientH - statusbarH - 5) - newPos;
             m_searchPaneHeight = std::max(60, newPaneH);
+        } else if (m_outlineSplitter.IsDragging()) {
+            int clientW = rc.right - rc.left;
+            m_outlineWidth = std::clamp(clientW - newPos - 5, 140, std::max(150, clientW - m_splitterPos - 100));
         } else {
             m_splitterPos = newPos;
         }
@@ -1575,6 +1622,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 case ID_INSERT_IMAGE:       tipText = L"插入图片"; break;
                 case ID_INSERT_TABLE:       tipText = L"插入表格 (Ctrl+Shift+T)"; break;
                 case ID_FILE_SAVE:          tipText = L"保存笔记 (Ctrl+S)"; break;
+                case ID_VIEW_OUTLINE:       tipText = L"大纲目录 (Ctrl+Shift+O)"; break;
                 default: break;
                 }
                 if (tipText) {
@@ -1675,6 +1723,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             if (pNmhdr->code == EN_SELCHANGE) {
                 int level = m_richEditView.GetCurrentHeadingLevel();
                 m_toolbar.SetSelectedHeadingIndex(level);
+                SyncOutlineSelection();
                 return 0;
             }
         }
@@ -1700,7 +1749,19 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_COMMAND: {
+        if (LOWORD(wParam) == IDC_MAIN_RICHEDIT && HIWORD(wParam) == EN_KILLFOCUS) {
+            if (m_isOutlineVisible) {
+                UpdateOutline();
+            }
+            return 0;
+        }
+
         WORD cmdId = LOWORD(wParam);
+        if (cmdId == ID_VIEW_OUTLINE) {
+            ToggleOutlinePane();
+            return 0;
+        }
+
         if (cmdId >= ID_VAULT_SWITCH_BASE && cmdId <= ID_VAULT_SWITCH_MAX) {
             size_t idx = static_cast<size_t>(cmdId - ID_VAULT_SWITCH_BASE);
             const auto* vault = m_vaultManager.GetVault(idx);
@@ -2027,6 +2088,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 if (m_activeNoteId == nodeId) {
                     m_activeNoteId = 0;
                     m_richEditView.SetText(L"");
+                    m_outlinePane.ClearOutline();
                 }
                 m_treeView.DeleteItem(hCur);
             }
@@ -2122,6 +2184,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     case WM_DESTROY:
         SaveActiveNote();
+        m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
+        m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
         if (m_db) {
             m_db->Close();
         }
@@ -2698,6 +2762,52 @@ void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
     m_isFilteringTree = false;
     SendMessageW(hTree, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hTree, nullptr, TRUE);
+}
+
+void MainWindow::ShowOutlinePane(bool show) {
+    if (m_isOutlineVisible == show) return;
+    m_isOutlineVisible = show;
+
+    HMENU hMenu = GetMenu(m_hWnd);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_VIEW_OUTLINE, m_isOutlineVisible ? MF_CHECKED : MF_UNCHECKED);
+    }
+    m_toolbar.SetOutlineButtonChecked(m_isOutlineVisible);
+
+    m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
+
+    RECT rc;
+    GetClientRect(m_hWnd, &rc);
+    LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
+
+    if (m_isOutlineVisible) {
+        UpdateOutline();
+    }
+}
+
+void MainWindow::ToggleOutlinePane() {
+    ShowOutlinePane(!m_isOutlineVisible);
+}
+
+void MainWindow::UpdateOutline() {
+    if (!m_isOutlineVisible || m_isUpdatingOutline) return;
+    m_isUpdatingOutline = true;
+
+    auto items = m_richEditView.ExtractOutlineItems();
+    m_outlinePane.SetOutlineItems(items);
+
+    CHARRANGE cr = {};
+    SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    m_outlinePane.SelectNearestItem(cr.cpMin);
+
+    m_isUpdatingOutline = false;
+}
+
+void MainWindow::SyncOutlineSelection() {
+    if (!m_isOutlineVisible || m_isUpdatingOutline) return;
+    CHARRANGE cr = {};
+    SendMessageW(m_richEditView.GetHwnd(), EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&cr));
+    m_outlinePane.SelectNearestItem(cr.cpMin);
 }
 
 } // namespace anynote::ui

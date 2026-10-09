@@ -103,6 +103,9 @@
 #define ID_CODE_LANG_BASE          1330
 #define ID_CODE_LANG_MAX           1340
 
+// View Commands
+#define ID_VIEW_OUTLINE         1460
+
 // Security Commands
 #define ID_SECURITY_ENCRYPT     1401
 
@@ -125,6 +128,13 @@
 #define IDC_TOOLBAR_HEADING_COMBO 2010
 #define IDC_MAIN_VAULT_BAR      2011
 #define IDC_MAIN_NODE_SEARCH_BAR 2012
+#define IDC_MAIN_OUTLINE_PANE   2013
+#define IDC_MAIN_SPLITTER_OUTLINE 2014
+
+// Outline Pane Child IDs
+#define IDC_OUTLINE_TREE        3401
+#define IDC_OUTLINE_BTN_CLOSE   3402
+#define IDC_OUTLINE_EMPTY_LABEL 3403
 
 // Node Search Child IDs
 #define IDC_NODE_SEARCH_EDIT    3301

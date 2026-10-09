@@ -41,6 +41,8 @@ set(SOURCES
     src/ui/SearchPane.h
     src/ui/NodeSearchBar.cpp
     src/ui/NodeSearchBar.h
+    src/ui/OutlinePane.cpp
+    src/ui/OutlinePane.h
     src/ui/MainWindow.cpp
     src/ui/MainWindow.h
     src/storage/Database.cpp
@@ -138,6 +140,32 @@ target_link_libraries(test_node_search PRIVATE
     sqlite3mc::sqlite3mc_static comctl32 ole32 uxtheme shlwapi gdiplus
 )
 set_property(TARGET test_node_search PROPERTY
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+# Outline view extraction and navigation regression test
+add_executable(test_outline
+    tests/test_outline.cpp
+    src/ui/OutlinePane.cpp
+    src/ui/OutlinePane.h
+    src/ui/RichEditView.cpp
+    src/ui/RichEditView.h
+    src/ui/TreeView.cpp
+    src/ui/TreeView.h
+    src/ui/TableEditor.cpp
+    src/ui/TableEditor.h
+    src/ui/CodeBlockHoverBar.cpp
+    src/ui/CodeBlockHoverBar.h
+    src/common/SyntaxHighlighter.cpp
+    src/common/SyntaxHighlighter.h
+    src/common/Window.cpp
+    src/common/Window.h
+)
+target_include_directories(test_outline PRIVATE src res)
+target_link_libraries(test_outline PRIVATE
+    comctl32 ole32 uxtheme shlwapi gdiplus
+)
+set_property(TARGET test_outline PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 

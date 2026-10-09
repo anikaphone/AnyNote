@@ -8,6 +8,7 @@
 #include "ui/FindReplaceDialog.h"
 #include "ui/SearchPane.h"
 #include "ui/NodeSearchBar.h"
+#include "ui/OutlinePane.h"
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
 #include "storage/VaultManager.h"
@@ -64,6 +65,12 @@ private:
     void ShowNodeSearch(bool show);
     void FilterTreeNodes(const std::wstring& keyword);
 
+    // 大纲目录相关操作
+    void ToggleOutlinePane();
+    void ShowOutlinePane(bool show);
+    void UpdateOutline();
+    void SyncOutlineSelection();
+
     // 多笔记本库相关操作
     void UpdateVaultBarUI();
     void OnNewVault();
@@ -81,6 +88,8 @@ private:
     SearchPane m_searchPane;
     NodeSearchBar m_nodeSearchBar;
     Splitter m_searchSplitter;
+    OutlinePane m_outlinePane;
+    Splitter m_outlineSplitter;
     HWND m_hStatusBar = nullptr;
 
     std::unique_ptr<storage::Database> m_db;
@@ -98,9 +107,12 @@ private:
 
     int m_splitterPos = 260; // 默认左侧分割条 X 坐标
     int m_searchPaneHeight = 180; // 默认下方全库搜索窗格高度
+    int m_outlineWidth = 220; // 默认右侧大纲面板宽度
     bool m_isSearchPaneVisible = false; // 全库搜索窗格是否显示
     bool m_isNodeSearchVisible = false; // 目录树节点搜索栏是否显示
+    bool m_isOutlineVisible = false;    // 大纲面板是否显示
     bool m_isFilteringTree = false;     // 是否正在执行树节点过滤
+    bool m_isUpdatingOutline = false;   // 是否正在更新大纲
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
 };

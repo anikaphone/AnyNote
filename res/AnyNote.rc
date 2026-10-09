@@ -34,6 +34,11 @@ BEGIN
         MENUITEM "全选(&A)\tCtrl+A",             ID_EDIT_SELECTALL
     END
 
+    POPUP "视图(&V)"
+    BEGIN
+        MENUITEM "大纲目录(&O)\tCtrl+Shift+O",   ID_VIEW_OUTLINE
+    END
+
     POPUP "搜索(&S)"
     BEGIN
         MENUITEM "搜索节点(&P)...\tCtrl+P",       ID_TREE_SEARCH
@@ -111,6 +116,7 @@ BEGIN
     VK_F3, ID_EDIT_FIND_PREV,   VIRTKEY, SHIFT
     "F", ID_SEARCH_GLOBAL,      VIRTKEY, CONTROL, SHIFT
     "P", ID_TREE_SEARCH,        VIRTKEY, CONTROL
+    "O", ID_VIEW_OUTLINE,       VIRTKEY, CONTROL, SHIFT
 END
 
 // 插入代码块对话框

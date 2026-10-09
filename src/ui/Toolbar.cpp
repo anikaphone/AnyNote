@@ -208,12 +208,24 @@ void RenderFluentIcon(Gdiplus::Graphics& g, int iconIndex, int size) {
         g.DrawRectangle(&mainPen, label);
         break;
     }
+    case 9: { // 9: Outline / Table of Contents
+        // H1 顶层标题 (左短横，右长横)
+        g.DrawLine(&mainPen, 2.5f * scale, 3.5f * scale, 5.0f * scale, 3.5f * scale);
+        g.DrawLine(&mainPen, 6.5f * scale, 3.5f * scale, 13.5f * scale, 3.5f * scale);
+        // H2 二级标题 (缩进点与中长横)
+        g.DrawLine(&subPen, 4.8f * scale, 7.5f * scale, 6.8f * scale, 7.5f * scale);
+        g.DrawLine(&mainPen, 8.2f * scale, 7.5f * scale, 13.5f * scale, 7.5f * scale);
+        // H3 三级标题 (深缩进点与短横)
+        g.DrawLine(&subPen, 6.8f * scale, 11.5f * scale, 8.5f * scale, 11.5f * scale);
+        g.DrawLine(&mainPen, 9.8f * scale, 11.5f * scale, 13.5f * scale, 11.5f * scale);
+        break;
+    }
     }
 }
 
 HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     int iconSize = MulDiv(kToolbarIconSize, dpi, 96);
-    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 9, 0);
+    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 10, 0);
     if (!hImageList) return nullptr;
 
     BITMAPINFO bmi = {};
@@ -224,7 +236,7 @@ HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    for (int i = 0; i < 9; ++i) {
+    for (int i = 0; i < 10; ++i) {
         void* pBits = nullptr;
         HBITMAP hBmp = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
         if (!hBmp) continue;
@@ -309,7 +321,9 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         { 6, ID_INSERT_IMAGE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
         { 7, ID_INSERT_TABLE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
-        { 8, ID_FILE_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 }
+        { 8, ID_FILE_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
+        { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
+        { 9, ID_VIEW_OUTLINE, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, -1 }
     };
 
     SendMessageW(m_hWnd, TB_ADDBUTTONSW, buttons.size(), reinterpret_cast<LPARAM>(buttons.data()));
@@ -432,6 +446,12 @@ int Toolbar::GetSelectedHeadingIndex() const {
         return static_cast<int>(SendMessageW(m_hHeadingCombo, CB_GETCURSEL, 0, 0));
     }
     return 0;
+}
+
+void Toolbar::SetOutlineButtonChecked(bool checked) {
+    if (m_hWnd) {
+        SendMessageW(m_hWnd, TB_CHECKBUTTON, ID_VIEW_OUTLINE, MAKELPARAM(checked ? TRUE : FALSE, 0));
+    }
 }
 
 } // namespace anynote::ui

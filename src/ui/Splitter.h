@@ -18,6 +18,7 @@ public:
     }
 
     bool Initialize(HWND hParent, int x, int y, int size, bool isHorizontal = false);
+    bool IsDragging() const noexcept { return m_isDragging; }
 
     static const wchar_t* GetClassName() { return L"AnyNoteSplitter"; }
     static void RegisterClassIfNeeded(HINSTANCE hInstance);
