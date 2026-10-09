@@ -1389,6 +1389,7 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
     } else {
         m_richEditView.SetText(L"");
     }
+    KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
     UpdateOutline();
 }
 
@@ -1446,8 +1447,19 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
     case WM_EDITOR_FORMAT_CHANGED:
         m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
-        UpdateOutline();
+        if (m_isOutlineVisible && m_outlinePane.GetHwnd()) {
+            // 防抖 200ms：快速连续输入或选区变动时不频繁触发全文 TOM 遍历
+            SetTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE, 200, nullptr);
+        }
         return 0;
+
+    case WM_TIMER:
+        if (wParam == TIMER_OUTLINE_DEBOUNCE) {
+            KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
+            UpdateOutline();
+            return 0;
+        }
+        break;
 
     case WM_CONTEXTMENU: {
         HWND hWndTarget = reinterpret_cast<HWND>(wParam);
@@ -2244,6 +2256,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
         m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
         m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", m_isAlwaysOnTop ? L"1" : L"0");
+        KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
         if (m_db) {
             m_db->Close();
         }
@@ -2857,6 +2870,7 @@ void MainWindow::ShowOutlinePane(bool show) {
     GetClientRect(m_hWnd, &rc);
     LayoutChildren(rc.right - rc.left, rc.bottom - rc.top);
 
+    KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
     if (m_isOutlineVisible) {
         UpdateOutline();
     }

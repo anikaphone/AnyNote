@@ -144,6 +144,7 @@ private:
     void ApplyDefaultFormatting(bool allDocument = false);
     void ApplyCodeTypingFormat();
     bool m_updatingCodeLayout = false;
+    bool m_hasCodeBlocks = false;
 };
 
 } // namespace anynote::ui

@@ -672,6 +672,18 @@ bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfCon
     return true;
 }
 
+static std::wstring EscapeSqlLikePattern(std::wstring_view input) {
+    std::wstring escaped;
+    escaped.reserve(input.size() + 4);
+    for (wchar_t ch : input) {
+        if (ch == L'%' || ch == L'_' || ch == L'\\') {
+            escaped.push_back(L'\\');
+        }
+        escaped.push_back(ch);
+    }
+    return escaped;
+}
+
 std::vector<SearchResult> NoteRepository::SearchNotes(const std::wstring& keyword, bool matchCase, bool searchContent) {
     std::vector<SearchResult> results;
     if (!m_db.IsOpen() || keyword.empty()) return results;
@@ -681,10 +693,13 @@ std::vector<SearchResult> NoteRepository::SearchNotes(const std::wstring& keywor
         std::transform(needle.begin(), needle.end(), needle.begin(), ::towlower);
     }
 
-    // 1. 标题匹配
+    std::wstring likePattern = L"%" + EscapeSqlLikePattern(keyword) + L"%";
+
+    // 1. 标题匹配：利用 SQL LIKE 初筛，避免将全库所有标题拉回内存逐行遍历
     {
         Database::Statement stmt;
-        if (stmt.Prepare(m_db, "SELECT id, title FROM nodes ORDER BY sequence ASC, id ASC;")) {
+        if (stmt.Prepare(m_db, "SELECT id, title FROM nodes WHERE title LIKE ? ESCAPE '\\' ORDER BY sequence ASC, id ASC;")) {
+            stmt.BindText(1, likePattern);
             while (stmt.Step() == SQLITE_ROW) {
                 int64_t id = stmt.GetInt64(0);
                 std::wstring title = stmt.GetWideText(1);
@@ -706,20 +721,19 @@ std::vector<SearchResult> NoteRepository::SearchNotes(const std::wstring& keywor
         }
     }
 
-    // 2. 正文纯文本匹配
+    // 2. 正文纯文本匹配：
     if (searchContent) {
         Database::Statement stmt;
-        if (stmt.Prepare(m_db, "SELECT n.id, n.title, c.plain_text, c.content_rtf FROM nodes n JOIN node_contents c ON n.id = c.node_id WHERE (c.plain_text IS NOT NULL AND c.plain_text != '') OR (c.content_rtf IS NOT NULL);")) {
+        // 核心性能优化：完全排除大型 content_rtf 二进制 BLOB，并由 SQLite 在数据库引擎层进行 LIKE 初筛
+        if (stmt.Prepare(m_db,
+            "SELECT n.id, n.title, c.plain_text FROM nodes n "
+            "JOIN node_contents c ON n.id = c.node_id "
+            "WHERE c.plain_text IS NOT NULL AND c.plain_text != '' AND c.plain_text LIKE ? ESCAPE '\\';")) {
+            stmt.BindText(1, likePattern);
             while (stmt.Step() == SQLITE_ROW) {
                 int64_t id = stmt.GetInt64(0);
                 std::wstring title = stmt.GetWideText(1);
                 std::wstring content = stmt.GetWideText(2);
-                if (content.empty()) {
-                    std::string rtf = stmt.GetBlob(3);
-                    if (!rtf.empty()) {
-                        content = ExtractPlainTextFromRtf(rtf);
-                    }
-                }
                 if (content.empty()) continue;
 
                 std::wstring contentCmp = content;
@@ -736,6 +750,47 @@ std::vector<SearchResult> NoteRepository::SearchNotes(const std::wstring& keywor
                     sr.matchOffsetInText = static_cast<int>(pos);
 
                     // 截取上下文摘要 (前后各约 25 个字符)
+                    size_t start = (pos > 25) ? (pos - 25) : 0;
+                    size_t end = std::min(content.size(), pos + needle.size() + 35);
+                    std::wstring snippet = content.substr(start, end - start);
+                    for (auto& ch : snippet) {
+                        if (ch == L'\r' || ch == L'\n' || ch == L'\t') ch = L' ';
+                    }
+                    if (start > 0) snippet = L"..." + snippet;
+                    if (end < content.size()) snippet = snippet + L"...";
+
+                    sr.snippet = std::move(snippet);
+                    results.push_back(std::move(sr));
+                }
+            }
+        }
+
+        // 冷数据保底兼容：仅对极罕见的 plain_text 为空但 content_rtf 存在的旧记录单独按需查询
+        Database::Statement coldStmt;
+        if (coldStmt.Prepare(m_db,
+            "SELECT n.id, n.title, c.content_rtf FROM nodes n "
+            "JOIN node_contents c ON n.id = c.node_id "
+            "WHERE (c.plain_text IS NULL OR c.plain_text = '') AND c.content_rtf IS NOT NULL;")) {
+            while (coldStmt.Step() == SQLITE_ROW) {
+                int64_t id = coldStmt.GetInt64(0);
+                std::string rtf = coldStmt.GetBlob(2);
+                if (rtf.empty()) continue;
+                std::wstring content = ExtractPlainTextFromRtf(rtf);
+                if (content.empty()) continue;
+
+                std::wstring contentCmp = content;
+                if (!matchCase) {
+                    std::transform(contentCmp.begin(), contentCmp.end(), contentCmp.begin(), ::towlower);
+                }
+
+                size_t pos = contentCmp.find(needle);
+                if (pos != std::wstring::npos) {
+                    SearchResult sr;
+                    sr.nodeId = id;
+                    sr.title = coldStmt.GetWideText(1);
+                    sr.matchInTitle = false;
+                    sr.matchOffsetInText = static_cast<int>(pos);
+
                     size_t start = (pos > 25) ? (pos - 25) : 0;
                     size_t end = std::min(content.size(), pos + needle.size() + 35);
                     std::wstring snippet = content.substr(start, end - start);

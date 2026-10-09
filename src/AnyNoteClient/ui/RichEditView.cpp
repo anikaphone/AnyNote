@@ -356,6 +356,7 @@ void RichEditView::SetBounds(int x, int y, int width, int height, bool repaint) 
 void RichEditView::SetText(const std::wstring& text) {
     if (!m_hWnd) return;
     m_hoverBar.Hide();
+    m_hasCodeBlocks = (text.find(L"[lang:") != std::wstring::npos);
     SetWindowTextW(m_hWnd, text.c_str());
 }
 
@@ -396,6 +397,7 @@ bool RichEditView::StreamInRTF(std::string_view rtfData) {
     if (!m_hWnd || rtfData.empty()) return false;
 
     m_hoverBar.Hide();
+    m_hasCodeBlocks = (rtfData.find("[lang:") != std::string_view::npos);
     StreamInCookie cookie{rtfData.data(), rtfData.size()};
     EDITSTREAM es = {};
     es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
@@ -877,6 +879,7 @@ bool RichEditView::InsertCodeBlock(std::wstring_view codeContent, common::CodeLa
     bool ok = StreamInSelectionRTF(rtf);
 
     if (ok) {
+        m_hasCodeBlocks = true;
         CodeBlockInfo info;
         if (GetCodeBlockAt(crBefore.cpMin, &info) ||
             GetCodeBlockAt(crBefore.cpMin + 1, &info) ||
@@ -1134,6 +1137,13 @@ bool RichEditView::SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::Co
 
 void RichEditView::RefreshCodeBlockLayout() {
     if (!m_hWnd || m_updatingCodeLayout) return;
+    // 普通 RichEdit 粘贴不会经过 StreamInRTF/InsertCodeBlock，首次编辑时
+    // 需要从当前文本重新检测代码块，否则布局归一化会被旧标志提前跳过。
+    if (!m_hasCodeBlocks) {
+        const std::wstring currentText = GetText();
+        if (currentText.find(L"[lang:") == std::wstring::npos) return;
+        m_hasCodeBlocks = true;
+    }
     using Microsoft::WRL::ComPtr;
     ComPtr<IUnknown> ole;
     SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(ole.GetAddressOf()));
@@ -1148,7 +1158,10 @@ void RichEditView::RefreshCodeBlockLayout() {
     search->GetText(&story);
     const std::wstring text = story ? std::wstring(story, SysStringLen(story)) : std::wstring();
     SysFreeString(story);
-    if (text.find(L"[lang:") == std::wstring::npos) return;
+    if (text.find(L"[lang:") == std::wstring::npos) {
+        m_hasCodeBlocks = false;
+        return;
+    }
     RECT format;
     SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
     const UINT dpi = std::max(96U, GetDpiForWindow(m_hWnd));

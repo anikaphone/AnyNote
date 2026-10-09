@@ -123,6 +123,7 @@ private:
     bool m_isAlwaysOnTop = false;       // 窗口是否置顶
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
+    static constexpr UINT_PTR TIMER_OUTLINE_DEBOUNCE = 2001;
 };
 
 } // namespace anynote::ui
