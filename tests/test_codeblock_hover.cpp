@@ -251,7 +251,9 @@ int main(int argc, char** argv) {
             SendMessageW(editor.GetHwnd(), EM_GETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&format));
             Check(std::wstring(format.szFaceName) == L"Consolas", "Code insertion must retain monospace typing font");
             Check((format.dwEffects & CFE_HIDDEN) == 0, "Typing must not inherit hidden language metadata");
-            const auto saved = editor.StreamOutRTF();
+            const auto savedOpt = editor.StreamOutRTF();
+            Check(savedOpt.has_value(), "Cannot export code RTF");
+            const std::string saved = *savedOpt;
             Check(editor.StreamInRTF(saved), "Cannot reload code RTF");
             Check(editor.GetCodeBlockAt(first.codeStart, &first), "Reload lost code metadata");
             Check(first.codeText.find(L"int first = 1;") != std::wstring::npos, "Reload changed code text");

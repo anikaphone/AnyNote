@@ -184,7 +184,9 @@ void Run(RichEditView& editor) {
     mouse(WM_LBUTTONUP, textPoint(L"Alpha"), MK_CONTROL);
     Check(editor.GetSelectedTableCellCount() == 1, "Resized row cell must remain selectable");
     editor.ClearTableSelection();
-    const std::string saved = editor.StreamOutRTF();
+    auto savedOpt = editor.StreamOutRTF();
+    Check(savedOpt.has_value(), "StreamOutRTF failed");
+    const std::string saved = std::move(*savedOpt);
     Check(editor.StreamInRTF(saved), "RTF reload failed");
     Check(textPoint(L"Alpha").y == bottom, "Reload lost vertical layout");
     editor.SelectRange(find(L"Alpha"), find(L"Alpha"));

@@ -760,6 +760,21 @@ MainWindow::MainWindow(const std::wstring& iniPath)
     : m_vaultManager(iniPath), m_findReplaceDialog(m_richEditView) {
 }
 
+MainWindow::~MainWindow() {
+    if (m_hStatusFont) {
+        DeleteObject(m_hStatusFont);
+        m_hStatusFont = nullptr;
+    }
+    if (m_hIconBig) {
+        DestroyIcon(m_hIconBig);
+        m_hIconBig = nullptr;
+    }
+    if (m_hIconSmall) {
+        DestroyIcon(m_hIconSmall);
+        m_hIconSmall = nullptr;
+    }
+}
+
 void MainWindow::RegisterClassIfNeeded(HINSTANCE hInstance) {
     if (s_mainClassRegistered) return;
 
@@ -809,13 +824,13 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     }
 
     // 设置窗口大/小图标
-    HICON hIconBig = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
-    HICON hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
-    if (hIconBig) {
-        SendMessageW(m_hWnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(hIconBig));
+    m_hIconBig = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR);
+    m_hIconSmall = (HICON)LoadImageW(hInstance, MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR);
+    if (m_hIconBig) {
+        SendMessageW(m_hWnd, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(m_hIconBig));
     }
-    if (hIconSmall) {
-        SendMessageW(m_hWnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(hIconSmall));
+    if (m_hIconSmall) {
+        SendMessageW(m_hWnd, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(m_hIconSmall));
     }
 
     RECT rcClient;
@@ -868,13 +883,13 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
             return lr;
         }, 1, 0);
 
-        HFONT hStatusFont = CreateFontW(
+        m_hStatusFont = CreateFontW(
             -MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI"
         );
-        if (hStatusFont) {
-            SendMessageW(m_hStatusBar, WM_SETFONT, reinterpret_cast<WPARAM>(hStatusFont), TRUE);
+        if (m_hStatusFont) {
+            SendMessageW(m_hStatusBar, WM_SETFONT, reinterpret_cast<WPARAM>(m_hStatusFont), TRUE);
         }
     }
 
@@ -1179,7 +1194,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     std::string currentPwd = password;
 
     bool opened = newDb->Open(filePath, currentPwd);
-    while (!opened && newDb->GetLastError() == "ENCRYPTED_REQUIRES_PASSWORD") {
+    while (!opened && newDb->IsPasswordRequiredOrWrong()) {
         PasswordPromptContext ctx;
         INT_PTR res = DialogBoxParamW(
             GetModuleHandleW(nullptr),
@@ -1270,6 +1285,9 @@ void MainWindow::CancelDragOperation() {
 }
 
 void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
+    if (m_activeNoteId > 0 && !SaveActiveNote()) {
+        return;
+    }
     m_treeView.ClearAll();
     m_activeNoteId = 0;
     if (!m_repo) return;
@@ -1336,9 +1354,17 @@ bool MainWindow::SaveActiveNote() {
     if (m_activeNoteId <= 0) return true;
     if (!m_repo || !m_richEditView.GetHwnd()) return false;
 
-    std::string rtf = m_richEditView.StreamOutRTF();
+    auto rtfOpt = m_richEditView.StreamOutRTF();
+    if (!rtfOpt.has_value()) {
+        if (m_hStatusBar) {
+            SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 导出失败"));
+        }
+        MessageBoxW(m_hWnd, L"当前笔记富文本导出失败，未写入数据库以防止数据丢失。", L"保存失败", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
     std::wstring plainText = m_richEditView.GetPlainText();
-    if (!m_repo->UpdateNoteContent(m_activeNoteId, rtf, plainText)) {
+    if (!m_repo->UpdateNoteContent(m_activeNoteId, *rtfOpt, plainText)) {
         if (m_hStatusBar) {
             SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 保存失败"));
         }
@@ -1357,7 +1383,9 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
 
     std::string rtf = m_repo->GetNoteContent(nodeId);
     if (!rtf.empty()) {
-        m_richEditView.StreamInRTF(rtf);
+        if (!m_richEditView.StreamInRTF(rtf)) {
+            MessageBoxW(m_hWnd, L"读取笔记富文本内容失败，数据可能已损坏！", L"加载错误", MB_OK | MB_ICONWARNING);
+        }
     } else {
         m_richEditView.SetText(L"");
     }
@@ -1371,7 +1399,14 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
 
     if (!pNmtv->itemNew.hItem) {
         if (m_richEditView.GetHwnd()) {
-            SaveActiveNote();
+            if (m_activeNoteId > 0 && !SaveActiveNote()) {
+                if (pNmtv->itemOld.hItem) {
+                    m_revertingTreeSelection = true;
+                    m_treeView.SelectItem(pNmtv->itemOld.hItem);
+                    m_revertingTreeSelection = false;
+                }
+                return;
+            }
             m_richEditView.SetText(L"");
         }
         m_activeNoteId = 0;
@@ -2150,6 +2185,10 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 MessageBoxW(m_hWnd, L"尚未打开任何笔记本！", L"提示", MB_OK | MB_ICONWARNING);
                 return 0;
             }
+            if (m_activeNoteId > 0 && !SaveActiveNote()) {
+                MessageBoxW(m_hWnd, L"当前笔记保存失败，已中止修改密码以防数据丢失。", L"提示", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
             SetPasswordContext ctx;
             INT_PTR res = DialogBoxParamW(
                 GetModuleHandleW(nullptr),
@@ -2161,7 +2200,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             if (res == IDOK && ctx.ok) {
                 if (m_db->SetPassword(ctx.newPassword)) {
                     UpdateEncryptionStatusUI();
-                    if (ctx.removePassword) {
+                    if (m_db->GetLastError() == "PASSWORD_CHANGED_BUT_WAL_FAILED") {
+                        MessageBoxW(m_hWnd, L"密码已成功变更，但切回 WAL 日志模式失败（当前处于传统日志模式）。", L"提示", MB_OK | MB_ICONWARNING);
+                    } else if (ctx.removePassword) {
                         MessageBoxW(m_hWnd, L"已成功解除密码，当前笔记本为未加密明文存储。", L"成功", MB_OK | MB_ICONINFORMATION);
                     } else {
                         MessageBoxW(m_hWnd, L"密码设置成功！全库已采用 AES-256 高强度加密。\r\n下次打开该文件时需要输入此密码。", L"成功", MB_OK | MB_ICONINFORMATION);
@@ -2170,6 +2211,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     std::wstring err = anynote::utils::Utf8ToWide(m_db->GetLastError());
                     MessageBoxW(m_hWnd, (L"修改密码失败：\r\n" + err).c_str(), L"错误", MB_OK | MB_ICONERROR);
                 }
+            }
+            if (!ctx.newPassword.empty()) {
+                SecureZeroMemory(ctx.newPassword.data(), ctx.newPassword.size());
             }
             return 0;
         }
@@ -2202,6 +2246,18 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", m_isAlwaysOnTop ? L"1" : L"0");
         if (m_db) {
             m_db->Close();
+        }
+        if (m_hStatusFont) {
+            DeleteObject(m_hStatusFont);
+            m_hStatusFont = nullptr;
+        }
+        if (m_hIconBig) {
+            DestroyIcon(m_hIconBig);
+            m_hIconBig = nullptr;
+        }
+        if (m_hIconSmall) {
+            DestroyIcon(m_hIconSmall);
+            m_hIconSmall = nullptr;
         }
         PostQuitMessage(0);
         return 0;
@@ -2631,6 +2687,10 @@ void MainWindow::ShowNodeSearch(bool show) {
 void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
     if (!m_repo || !m_treeView.GetHwnd()) return;
 
+    if (m_activeNoteId > 0 && !SaveActiveNote()) {
+        return;
+    }
+
     std::wstring trimmed = TrimWhitespace(keyword);
     if (trimmed.empty()) {
         m_nodeSearchBar.SetMatchCount(0, false);
@@ -2681,7 +2741,9 @@ void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
     // - 父节点命中时，递归展示其所有下级子孙节点
     // - 子节点命中时，追溯保留其所有祖先节点（保证路径完整）
     std::unordered_set<int64_t> visibleIds;
+    std::unordered_set<int64_t> visitedDescendants;
     std::function<void(int64_t)> addDescendants = [&](int64_t parentId) {
+        if (!visitedDescendants.insert(parentId).second) return;
         auto it = childrenMap.find(parentId);
         if (it != childrenMap.end()) {
             for (int64_t childId : it->second) {
@@ -2695,9 +2757,10 @@ void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
         visibleIds.insert(matchedId);
         addDescendants(matchedId);
 
-        // 向上追溯祖先
+        // 向上追溯祖先 (加入 visitedAncestors 防止树结构异常成环导致死循环)
         int64_t currId = matchedId;
-        while (true) {
+        std::unordered_set<int64_t> visitedAncestors;
+        while (visitedAncestors.insert(currId).second) {
             auto it = nodeMap.find(currId);
             if (it == nodeMap.end() || it->second->parentId == 0) break;
             currId = it->second->parentId;

@@ -29,6 +29,9 @@ public:
     const std::wstring& GetFilePath() const noexcept { return m_filePath; }
     const std::string& GetLastError() const noexcept { return m_lastError; }
     bool IsEncrypted() const noexcept { return m_isEncrypted; }
+    bool IsPasswordRequiredOrWrong() const noexcept {
+        return m_lastError == "ENCRYPTED_REQUIRES_PASSWORD" || m_lastError == "ENCRYPTED_WRONG_PASSWORD";
+    }
 
     // 设置或更改数据库密码 (传入空密码则解除加密为明文库)
     bool SetPassword(const std::string& newPassword);

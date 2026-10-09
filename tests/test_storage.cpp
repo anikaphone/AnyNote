@@ -79,6 +79,8 @@ int main() {
         Database db;
         bool res = db.Open(dbPath, "wrong_pass");
         assert(!res);
+        assert(db.GetLastError() == "ENCRYPTED_WRONG_PASSWORD");
+        assert(db.IsPasswordRequiredOrWrong());
     }
 
     std::cout << "[TEST] 5. Testing reopening encrypted database with correct password..." << std::endl;
@@ -212,6 +214,15 @@ int main() {
         auto resBackfill = repo.SearchNotes(L"全库加密", false, true);
         assert(!resBackfill.empty());
         assert(resBackfill[0].nodeId == oldNoteId);
+
+        // 验证含有超长畸形数值控制字的 RTF 不会导致异常崩溃
+        int64_t malformedRtfNoteId = repo.CreateNote(0, L"畸形RTF数值测试笔记", 5, 0,
+            "{\\rtf1\\ansi \\u999999999999999999999999999999999999999999? malformed_rtf_payload\\par}");
+        assert(malformedRtfNoteId > 0);
+        assert(repo.InitializeSchema());
+        auto resMalformed = repo.SearchNotes(L"malformed_rtf_payload", false, true);
+        assert(!resMalformed.empty());
+        assert(resMalformed[0].nodeId == malformedRtfNoteId);
 
         db.Close();
     }
@@ -350,6 +361,35 @@ int main() {
         assert(FuzzySubsequenceMatch(L"", L"AnyNote")); // 空关键词匹配所有
         assert(FuzzySubsequenceMatch(L"", L""));
         assert(!FuzzySubsequenceMatch(L"a", L""));
+    }
+
+    // 15. 测试树结构父子关系遍历防环机制 (Cycle Resistance)
+    std::cout << "[TEST] 15. Testing IsDescendantOf cycle resistance..." << std::endl;
+    {
+        std::wstring cycleDbPath = L"test_cycle_resistance.anynote";
+        if (std::filesystem::exists(cycleDbPath)) {
+            std::filesystem::remove(cycleDbPath);
+        }
+        Database db;
+        assert(db.Open(cycleDbPath, ""));
+        NoteRepository repo(db);
+        assert(repo.InitializeSchema());
+
+        int64_t n1 = repo.CreateNote(0, L"Node 1");
+        int64_t n2 = repo.CreateNote(n1, L"Node 2");
+        assert(n1 > 0 && n2 > 0);
+
+        // 人为在数据库中注入循环关系 (使 Node 1 的 parent 成为 Node 2)
+        assert(db.Execute("UPDATE nodes SET parent_id = " + std::to_string(n2) + " WHERE id = " + std::to_string(n1) + ";"));
+
+        // IsDescendantOf 遇到环结构必须安全终止并返回 false，绝不能陷入死循环
+        assert(!repo.IsDescendantOf(n1, 999999));
+        assert(repo.IsDescendantOf(n1, n2));
+
+        db.Close();
+        if (std::filesystem::exists(cycleDbPath)) {
+            std::filesystem::remove(cycleDbPath);
+        }
     }
 
     std::cout << "[TEST] ALL PERSISTENCE, ENCRYPTION, MULTI-VAULT, INI CONFIG, CODEBLOCK AND NODE SEARCH TESTS PASSED SUCCESSFULLY!" << std::endl;

@@ -48,7 +48,7 @@ public:
     // 移动与重排节点 (拖拽支持：支持 AsChild, Before, After, AtRootEnd)
     bool MoveNode(int64_t dragNodeId, int64_t targetNodeId, DropPosition position);
     bool IsDescendantOf(int64_t checkId, int64_t ancestorId);
-    void ReorderSiblings(int64_t parentId);
+    bool ReorderSiblings(int64_t parentId);
 
     // 删除笔记 (递归级联删除该节点及其所有子孙节点与内容)
     bool DeleteNote(int64_t nodeId);

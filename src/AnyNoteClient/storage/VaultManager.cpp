@@ -161,30 +161,49 @@ bool VaultManager::Load() {
 bool VaultManager::Save() {
     EnsureIniFileExists();
 
-    WritePrivateProfileStringW(
+    bool ok = true;
+    if (!WritePrivateProfileStringW(
         L"General",
         L"ActiveVaultPath",
         m_activeVaultPath.c_str(),
-        m_iniPath.c_str()
-    );
+        m_iniPath.c_str())) {
+        ok = false;
+    }
 
-    // 清空现有 [Vaults] 小节内容，防止残留旧键
-    WritePrivateProfileStringW(L"Vaults", nullptr, nullptr, m_iniPath.c_str());
+    // 配置文件可由用户编辑，负数不能转换为 size_t 后作为循环上界。
+    int oldCount = GetPrivateProfileIntW(L"Vaults", L"Count", 0, m_iniPath.c_str());
+    if (oldCount < 0) {
+        oldCount = 0;
+    }
 
     std::wstring countStr = std::to_wstring(m_vaults.size());
-    WritePrivateProfileStringW(L"Vaults", L"Count", countStr.c_str(), m_iniPath.c_str());
+    if (!WritePrivateProfileStringW(L"Vaults", L"Count", countStr.c_str(), m_iniPath.c_str())) {
+        ok = false;
+    }
 
     for (size_t i = 0; i < m_vaults.size(); ++i) {
         std::wstring keyName = L"Vault_" + std::to_wstring(i) + L"_Name";
         std::wstring keyPath = L"Vault_" + std::to_wstring(i) + L"_Path";
 
-        WritePrivateProfileStringW(L"Vaults", keyName.c_str(), m_vaults[i].name.c_str(), m_iniPath.c_str());
-        WritePrivateProfileStringW(L"Vaults", keyPath.c_str(), m_vaults[i].path.c_str(), m_iniPath.c_str());
+        if (!WritePrivateProfileStringW(L"Vaults", keyName.c_str(), m_vaults[i].name.c_str(), m_iniPath.c_str())) {
+            ok = false;
+        }
+        if (!WritePrivateProfileStringW(L"Vaults", keyPath.c_str(), m_vaults[i].path.c_str(), m_iniPath.c_str())) {
+            ok = false;
+        }
+    }
+
+    // 清理多余的历史旧键，防止库缩减时残留废弃项
+    for (size_t i = m_vaults.size(); i < static_cast<size_t>(oldCount); ++i) {
+        std::wstring keyName = L"Vault_" + std::to_wstring(i) + L"_Name";
+        std::wstring keyPath = L"Vault_" + std::to_wstring(i) + L"_Path";
+        WritePrivateProfileStringW(L"Vaults", keyName.c_str(), nullptr, m_iniPath.c_str());
+        WritePrivateProfileStringW(L"Vaults", keyPath.c_str(), nullptr, m_iniPath.c_str());
     }
 
     // 刷新 Windows INI 缓存写入磁盘
     WritePrivateProfileStringW(nullptr, nullptr, nullptr, m_iniPath.c_str());
-    return true;
+    return ok;
 }
 
 const VaultItem* VaultManager::GetVault(size_t index) const {

@@ -417,8 +417,8 @@ bool RichEditView::StreamInSelectionRTF(std::string_view rtfData) {
     return (es.dwError == 0);
 }
 
-std::string RichEditView::StreamOutRTF() const {
-    if (!m_hWnd) return {};
+std::optional<std::string> RichEditView::StreamOutRTF() const {
+    if (!m_hWnd) return std::nullopt;
 
     // 确保临时高亮标记不会污染保存到数据库的 RTF 格式
     if (!m_markedRanges.empty()) {
@@ -431,6 +431,13 @@ std::string RichEditView::StreamOutRTF() const {
     es.pfnCallback = StreamOutCallback;
 
     SendMessageW(m_hWnd, EM_STREAMOUT, SF_RTF, reinterpret_cast<LPARAM>(&es));
+    if (es.dwError != 0) {
+        return std::nullopt;
+    }
+    // 合法的 RTF 流必须以 "{\rtf" 标识符开头
+    if (!outData.empty() && outData.rfind("{\\rtf", 0) != 0) {
+        return std::nullopt;
+    }
     return outData;
 }
 
@@ -1996,7 +2003,10 @@ int RichEditView::CountMatches(const std::wstring& text, bool matchCase, bool wh
     return count;
 }
 
-bool RichEditView::ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward, bool matchCase, bool wholeWord, bool wrapAround) {
+bool RichEditView::ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward, bool matchCase, bool wholeWord, bool wrapAround, bool* outFoundNext) {
+    if (outFoundNext) {
+        *outFoundNext = false;
+    }
     if (!m_hWnd || findText.empty()) return false;
 
     // 检查当前选区是否精确匹配查找内容
@@ -2010,6 +2020,7 @@ bool RichEditView::ReplaceCurrent(const std::wstring& findText, const std::wstri
         }
     }
 
+    bool didReplace = false;
     if (isMatch) {
         bool validWord = true;
         if (wholeWord) {
@@ -2024,10 +2035,15 @@ bool RichEditView::ReplaceCurrent(const std::wstring& findText, const std::wstri
         }
         if (validWord) {
             SendMessageW(m_hWnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(replaceText.c_str()));
+            didReplace = true;
         }
     }
 
-    return FindAndSelect(findText, forward, matchCase, wholeWord, wrapAround);
+    bool foundNext = FindAndSelect(findText, forward, matchCase, wholeWord, wrapAround);
+    if (outFoundNext) {
+        *outFoundNext = foundNext;
+    }
+    return didReplace;
 }
 
 int RichEditView::ReplaceAll(const std::wstring& findText, const std::wstring& replaceText, bool matchCase, bool wholeWord) {

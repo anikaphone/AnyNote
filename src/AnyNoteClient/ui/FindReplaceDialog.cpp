@@ -546,11 +546,20 @@ void FindReplaceDialog::Replace() {
     bool matchWord = (SendMessageW(m_hChkWholeWord, BM_GETCHECK, 0, 0) == BST_CHECKED);
     bool wrapAround = (SendMessageW(m_hChkWrapAround, BM_GETCHECK, 0, 0) == BST_CHECKED);
 
-    bool replaced = m_richEditView.ReplaceCurrent(findText, replaceText, true, matchCase, matchWord, wrapAround);
+    bool foundNext = false;
+    bool replaced = m_richEditView.ReplaceCurrent(findText, replaceText, true, matchCase, matchWord, wrapAround, &foundNext);
     if (replaced) {
-        SetStatusText(L"替换成功并已移动到下一处");
+        if (foundNext) {
+            SetStatusText(L"替换成功并已移动到下一处");
+        } else {
+            SetStatusText(L"替换成功，已无更多匹配项");
+        }
     } else {
-        SetStatusText(L"未找到更多可替换项");
+        if (foundNext) {
+            SetStatusText(L"已定位到匹配项，再次点击执行替换");
+        } else {
+            SetStatusText(L"未找到匹配项");
+        }
     }
 }
 

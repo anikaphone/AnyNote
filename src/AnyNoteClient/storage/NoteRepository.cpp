@@ -4,7 +4,9 @@
 #include <sqlite3.h>
 #include <chrono>
 #include <algorithm>
+#include <charconv>
 #include <cwctype>
+#include <unordered_set>
 #include <windows.h>
 
 namespace anynote::storage {
@@ -316,8 +318,13 @@ std::wstring ExtractPlainTextFromRtf(std::string_view rtf) {
                     i++;
                 }
                 if (hasNum) {
-                    std::string numStr(rtf.substr(numStart, i - numStart));
-                    numVal = sign * std::stoll(numStr);
+                    long long parsed = 0;
+                    auto res = std::from_chars(rtf.data() + numStart, rtf.data() + i, parsed);
+                    if (res.ec == std::errc()) {
+                        numVal = sign * parsed;
+                    } else {
+                        hasNum = false;
+                    }
                 }
 
                 if (i < len && rtf[i] == ' ') {
@@ -396,16 +403,19 @@ bool NoteRepository::InitializeSchema() {
     // 检查并自动升级既有数据库，保证具备 plain_text 列
     bool hasPlainTextCol = false;
     Database::Statement infoStmt;
-    if (infoStmt.Prepare(m_db, "PRAGMA table_info(node_contents);")) {
-        while (infoStmt.Step() == SQLITE_ROW) {
-            if (infoStmt.GetText(1) == "plain_text") {
-                hasPlainTextCol = true;
-                break;
-            }
+    if (!infoStmt.Prepare(m_db, "PRAGMA table_info(node_contents);")) {
+        return false;
+    }
+    while (infoStmt.Step() == SQLITE_ROW) {
+        if (infoStmt.GetText(1) == "plain_text") {
+            hasPlainTextCol = true;
+            break;
         }
     }
     if (!hasPlainTextCol) {
-        m_db.Execute("ALTER TABLE node_contents ADD COLUMN plain_text TEXT;");
+        if (!m_db.Execute("ALTER TABLE node_contents ADD COLUMN plain_text TEXT;")) {
+            return false;
+        }
     }
 
     // 自动为已有旧笔记数据补充纯文本索引 (如果 plain_text 为空但 content_rtf 存在)
@@ -419,19 +429,32 @@ bool NoteRepository::InitializeSchema() {
                 toMigrate.emplace_back(nid, std::move(rtf));
             }
         }
-        if (!toMigrate.empty() && m_db.BeginTransaction()) {
+        if (!toMigrate.empty()) {
+            if (!m_db.BeginTransaction()) {
+                return false;
+            }
             Database::Statement updateStmt;
-            if (updateStmt.Prepare(m_db, "UPDATE node_contents SET plain_text = ? WHERE node_id = ?;")) {
-                for (const auto& [nid, rtf] : toMigrate) {
-                    std::wstring plain = ExtractPlainTextFromRtf(rtf);
-                    updateStmt.Reset();
-                    updateStmt.BindText(1, plain);
-                    updateStmt.BindInt64(2, nid);
-                    updateStmt.Step();
+            if (!updateStmt.Prepare(m_db, "UPDATE node_contents SET plain_text = ? WHERE node_id = ?;")) {
+                m_db.Rollback();
+                return false;
+            }
+            for (const auto& [nid, rtf] : toMigrate) {
+                std::wstring plain = ExtractPlainTextFromRtf(rtf);
+                if (!updateStmt.Reset() ||
+                    !updateStmt.BindText(1, plain) ||
+                    !updateStmt.BindInt64(2, nid) ||
+                    updateStmt.Step() != SQLITE_DONE) {
+                    m_db.Rollback();
+                    return false;
                 }
             }
-            m_db.Commit();
+            if (!m_db.Commit()) {
+                m_db.Rollback();
+                return false;
+            }
         }
+    } else {
+        return false;
     }
 
     return true;
@@ -752,7 +775,8 @@ bool NoteRepository::IsDescendantOf(int64_t checkId, int64_t ancestorId) {
     if (checkId == ancestorId) return true;
 
     int64_t curId = checkId;
-    while (curId > 0) {
+    std::unordered_set<int64_t> visited;
+    while (curId > 0 && visited.insert(curId).second) {
         if (curId == ancestorId) return true;
         Database::Statement stmt;
         if (!stmt.Prepare(m_db, "SELECT parent_id FROM nodes WHERE id = ?;")) {
@@ -768,27 +792,35 @@ bool NoteRepository::IsDescendantOf(int64_t checkId, int64_t ancestorId) {
     return false;
 }
 
-void NoteRepository::ReorderSiblings(int64_t parentId) {
+bool NoteRepository::ReorderSiblings(int64_t parentId) {
     Database::Statement stmt;
     if (!stmt.Prepare(m_db, "SELECT id FROM nodes WHERE parent_id = ? ORDER BY sequence ASC, id ASC;")) {
-        return;
+        return false;
     }
-    stmt.BindInt64(1, parentId);
+    if (!stmt.BindInt64(1, parentId)) {
+        return false;
+    }
 
     std::vector<int64_t> ids;
-    while (stmt.Step() == SQLITE_ROW) {
+    int rc = SQLITE_OK;
+    while ((rc = stmt.Step()) == SQLITE_ROW) {
         ids.push_back(stmt.GetInt64(0));
+    }
+    if (rc != SQLITE_DONE) {
+        return false;
     }
 
     int seq = 0;
+    Database::Statement upd;
+    if (!upd.Prepare(m_db, "UPDATE nodes SET sequence = ? WHERE id = ?;")) {
+        return false;
+    }
     for (int64_t id : ids) {
-        Database::Statement upd;
-        if (upd.Prepare(m_db, "UPDATE nodes SET sequence = ? WHERE id = ?;")) {
-            upd.BindInt(1, seq++);
-            upd.BindInt64(2, id);
-            upd.Step();
+        if (!upd.Reset() || !upd.BindInt(1, seq++) || !upd.BindInt64(2, id) || upd.Step() != SQLITE_DONE) {
+            return false;
         }
     }
+    return true;
 }
 
 bool NoteRepository::MoveNode(int64_t dragNodeId, int64_t targetNodeId, DropPosition position) {
@@ -865,11 +897,17 @@ bool NoteRepository::MoveNode(int64_t dragNodeId, int64_t targetNodeId, DropPosi
     // 2. 如果是插入到指定位置 (Before/After)，在新父节点下为待插入位置腾出空间
     if (position == DropPosition::Before || position == DropPosition::After) {
         Database::Statement shiftStmt;
-        if (shiftStmt.Prepare(m_db, "UPDATE nodes SET sequence = sequence + 1 WHERE parent_id = ? AND sequence >= ? AND id != ?;")) {
-            shiftStmt.BindInt64(1, newParentId);
-            shiftStmt.BindInt(2, targetSeq);
-            shiftStmt.BindInt64(3, dragNodeId);
-            shiftStmt.Step();
+        if (!shiftStmt.Prepare(m_db, "UPDATE nodes SET sequence = sequence + 1 WHERE parent_id = ? AND sequence >= ? AND id != ?;")) {
+            m_db.Rollback();
+            return false;
+        }
+        if (!shiftStmt.BindInt64(1, newParentId) || !shiftStmt.BindInt(2, targetSeq) || !shiftStmt.BindInt64(3, dragNodeId)) {
+            m_db.Rollback();
+            return false;
+        }
+        if (shiftStmt.Step() != SQLITE_DONE) {
+            m_db.Rollback();
+            return false;
         }
     }
 
@@ -889,9 +927,15 @@ bool NoteRepository::MoveNode(int64_t dragNodeId, int64_t targetNodeId, DropPosi
     }
 
     // 4. 分别规整旧父节点与新父节点下的序列号，保证连续性
-    ReorderSiblings(oldParentId);
+    if (!ReorderSiblings(oldParentId)) {
+        m_db.Rollback();
+        return false;
+    }
     if (newParentId != oldParentId) {
-        ReorderSiblings(newParentId);
+        if (!ReorderSiblings(newParentId)) {
+            m_db.Rollback();
+            return false;
+        }
     }
 
     if (!m_db.Commit()) {

@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <optional>
 
 namespace anynote::ui {
 
@@ -51,7 +52,7 @@ public:
 
     bool StreamInRTF(std::string_view rtfData);
     bool StreamInSelectionRTF(std::string_view rtfData);
-    std::string StreamOutRTF() const;
+    std::optional<std::string> StreamOutRTF() const;
 
     // 富文本样式操作
     void ApplyHeading(int level);
@@ -126,7 +127,7 @@ public:
     bool FindAndSelect(const std::wstring& text, bool forward = true, bool matchCase = false, bool wholeWord = false, bool wrapAround = true);
     int CountMatches(const std::wstring& text, bool matchCase = false, bool wholeWord = false) const;
     bool SelectRange(LONG start, LONG end);
-    bool ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward = true, bool matchCase = false, bool wholeWord = false, bool wrapAround = true);
+    bool ReplaceCurrent(const std::wstring& findText, const std::wstring& replaceText, bool forward = true, bool matchCase = false, bool wholeWord = false, bool wrapAround = true, bool* outFoundNext = nullptr);
     int ReplaceAll(const std::wstring& findText, const std::wstring& replaceText, bool matchCase = false, bool wholeWord = false);
     int MarkAll(const std::wstring& text, bool matchCase = false, bool wholeWord = false);
     void ClearMarks();

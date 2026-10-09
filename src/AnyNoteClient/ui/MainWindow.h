@@ -20,7 +20,7 @@ namespace anynote::ui {
 class MainWindow : public common::Window {
 public:
     explicit MainWindow(const std::wstring& iniPath = L"");
-    ~MainWindow() override = default;
+    ~MainWindow() override;
 
     bool Initialize(HINSTANCE hInstance, int nCmdShow);
     HWND GetFindReplaceDialogHwnd() const noexcept { return m_findReplaceDialog.GetHwnd(); }
@@ -95,6 +95,9 @@ private:
     OutlinePane m_outlinePane;
     Splitter m_outlineSplitter;
     HWND m_hStatusBar = nullptr;
+    HFONT m_hStatusFont = nullptr;
+    HICON m_hIconBig = nullptr;
+    HICON m_hIconSmall = nullptr;
 
     std::unique_ptr<storage::Database> m_db;
     std::unique_ptr<storage::NoteRepository> m_repo;

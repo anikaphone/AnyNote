@@ -78,8 +78,8 @@ bool Database::Open(const std::wstring& filePath, const std::string& password) {
     char* zErrMsg = nullptr;
     rc = sqlite3_exec(m_db, "SELECT count(*) FROM sqlite_master;", nullptr, nullptr, &zErrMsg);
     if (rc != SQLITE_OK) {
-        if (password.empty() && rc == SQLITE_NOTADB) {
-            m_lastError = "ENCRYPTED_REQUIRES_PASSWORD"; // 标记需要密码
+        if (rc == SQLITE_NOTADB) {
+            m_lastError = password.empty() ? "ENCRYPTED_REQUIRES_PASSWORD" : "ENCRYPTED_WRONG_PASSWORD";
         } else {
             m_lastError = zErrMsg ? zErrMsg : "密码不正确或数据库已损坏";
         }
@@ -131,7 +131,8 @@ bool Database::SetPassword(const std::string& newPassword) {
     m_isEncrypted = !newPassword.empty();
 
     if (!Execute("PRAGMA journal_mode = WAL;")) {
-        return false;
+        // WAL 恢复失败并不代表修改密码失败，数据库已是新密码但处于 DELETE 日志模式
+        m_lastError = "PASSWORD_CHANGED_BUT_WAL_FAILED";
     }
 
     return true;
