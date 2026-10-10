@@ -90,6 +90,8 @@ public:
     void UpdateHoverBarPosition();
     RECT GetCodeBlockRect(const CodeBlockInfo& info) const;
     void RefreshCodeBlockLayout();
+    void MarkLayoutFormattingNeeded() noexcept { m_layoutFormattingNeeded = true; }
+    void RecordEditDiagnostic(const char* operation);
     void PaintCodeBlockFrames();
 
     // 表格操作 (插入 3*2 表格、行列调整、删除、单元格导航)
@@ -145,6 +147,11 @@ private:
     void ApplyCodeTypingFormat();
     bool m_updatingCodeLayout = false;
     bool m_hasCodeBlocks = false;
+    bool m_layoutFormattingNeeded = true;
+    long m_lastLayoutWidth = -1;
+    unsigned long long m_layoutRefreshCount = 0;
+    unsigned long long m_layoutAppliedCount = 0;
+    long m_codeBlockCount = 0;
 };
 
 } // namespace anynote::ui

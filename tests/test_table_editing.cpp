@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 #include <iostream>
 #include <stdexcept>
+#include <array>
 
 namespace anynote::ui {
 struct TableEditorGeometryTest {
@@ -81,6 +82,171 @@ ComPtr<ITextDocument2> Document(HWND window) {
     Check(ole && SUCCEEDED(ole.As(&document)), "Missing TOM2");
     return document;
 }
+std::wstring TableStory(RichEditView& editor) {
+    auto doc = Document(editor.GetHwnd());
+    ComPtr<ITextRange2> range;
+    Check(SUCCEEDED(doc->Range2(0, 0, &range)), "Missing story range");
+    long length = 0;
+    range->GetStoryLength(&length);
+    range->SetRange(0, length);
+    BSTR raw = nullptr;
+    Check(SUCCEEDED(range->GetText(&raw)), "Cannot read story");
+    std::wstring text(raw ? raw : L"", SysStringLen(raw));
+    SysFreeString(raw);
+    return text;
+}
+
+std::vector<std::array<long, 4>> TableBorders(RichEditView& editor) {
+    auto doc = Document(editor.GetHwnd());
+    const auto text = TableStory(editor);
+    std::vector<std::array<long, 4>> borders;
+    for (long pos = 0; pos < static_cast<long>(text.size()); ++pos) {
+        if (static_cast<unsigned short>(text[static_cast<size_t>(pos)]) != 0xfff9) continue;
+        ComPtr<ITextRange2> range;
+        ComPtr<ITextRow> row;
+        Check(SUCCEEDED(doc->Range2(pos, pos, &range)) && SUCCEEDED(range->GetRow(&row)), "Missing table row");
+        long count = 0;
+        Check(SUCCEEDED(row->GetCellCount(&count)), "Missing table cell count");
+        for (long column = 0; column < count; ++column) {
+            Check(SUCCEEDED(row->SetCellIndex(column)), "Cannot select table cell");
+            std::array<long, 4> widths{};
+            Check(SUCCEEDED(row->GetCellBorderWidths(&widths[0], &widths[1], &widths[2], &widths[3])), "Cannot read table borders");
+            borders.push_back(widths);
+        }
+    }
+    return borders;
+}
+
+std::vector<std::vector<long>> TableWidths(RichEditView& editor) {
+    auto doc = Document(editor.GetHwnd());
+    const auto text = TableStory(editor);
+    std::vector<std::vector<long>> widths;
+    for (long pos = 0; pos < static_cast<long>(text.size()); ++pos) {
+        if (static_cast<unsigned short>(text[static_cast<size_t>(pos)]) != 0xfff9) continue;
+        ComPtr<ITextRange2> range;
+        ComPtr<ITextRow> row;
+        Check(SUCCEEDED(doc->Range2(pos, pos, &range)) && SUCCEEDED(range->GetRow(&row)), "Missing table row");
+        long count = 0;
+        Check(SUCCEEDED(row->GetCellCount(&count)), "Missing table cell count");
+        widths.emplace_back();
+        for (long column = 0; column < count; ++column) {
+            Check(SUCCEEDED(row->SetCellIndex(column)), "Cannot select table cell");
+            long width = 0;
+            Check(SUCCEEDED(row->GetCellWidth(&width)), "Cannot read table cell width");
+            widths.back().push_back(width);
+        }
+    }
+    return widths;
+}
+
+void CheckBottomBorders(RichEditView& editor, const char* message) {
+    for (const auto& widths : TableBorders(editor)) {
+        Check(widths[3] > 0, message);
+    }
+}
+
+void CheckUniformWidths(RichEditView& editor, const char* message) {
+    const auto widths = TableWidths(editor);
+    Check(!widths.empty() && !widths.front().empty(), message);
+    for (const auto& row : widths) Check(row == widths.front(), message);
+}
+
+void CheckStructuralUndo(RichEditView& editor) {
+    editor.SetText(L"");
+    SendMessageW(editor.GetHwnd(), EM_EMPTYUNDOBUFFER, 0, 0);
+    std::vector<std::wstring> states{TableStory(editor)};
+    auto capture = [&](const char* name) {
+        UpdateWindow(editor.GetHwnd());
+        RedrawWindow(editor.GetHwnd(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        auto text = TableStory(editor);
+        std::cout << name << ": ";
+        for (wchar_t ch : text) std::cout << std::hex << static_cast<unsigned>(ch) << ' ';
+        std::cout << std::dec << std::endl;
+        states.push_back(std::move(text));
+        CheckBottomBorders(editor, "Table bottom border must remain present");
+        CheckUniformWidths(editor, "All table rows must use the same column widths");
+        const auto widths = TableWidths(editor);
+        std::cout << " widths=";
+        for (const auto& row : widths) { std::cout << '['; for (long width : row) std::cout << width << ','; std::cout << ']'; }
+        std::cout << std::endl;
+    };
+    Check(editor.InsertTable(2, 3), "Structure: insert table failed"); capture("insert-table");
+    const auto initial = TableStory(editor);
+    const long lastCell = static_cast<long>(initial.rfind(L'\xfff9')) + 2;
+    editor.SelectRange(lastCell, lastCell);
+    Check(editor.InsertTableRow(true), "Structure: first row failed"); capture("insert-row-1");
+    Check(editor.InsertTableRow(true), "Structure: second row failed"); capture("insert-row-2");
+    Check(editor.DeleteTableColumn(), "Structure: delete column failed"); capture("delete-column");
+    Check(editor.InsertTableRow(true), "Structure: third row failed"); capture("insert-row-3");
+    Check(editor.InsertTableRow(true), "Structure: fourth row failed"); capture("insert-row-4");
+    Check(editor.InsertTableColumn(true), "Structure: insert column failed"); capture("insert-column");
+    for (size_t i = states.size() - 1; i > 0; --i) {
+        std::cout << "undo " << i << std::endl;
+        editor.Undo();
+        RedrawWindow(editor.GetHwnd(), nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+        CheckBottomBorders(editor, "Undo must retain table bottom borders");
+        const auto actual = TableStory(editor);
+        if (actual != states[i - 1]) {
+            std::cerr << "Unexpected undo story: ";
+            for (wchar_t ch : actual) std::cerr << std::hex << static_cast<unsigned>(ch) << ' ';
+            std::cerr << std::dec << std::endl;
+        }
+        Check(actual == states[i - 1], "Structural undo must restore the complete previous table");
+    }
+    for (size_t i = 1; i < states.size(); ++i) {
+        editor.Redo();
+        Check(TableStory(editor) == states[i], "Structural redo must restore the complete table");
+    }
+}
+
+void CheckMixedStructuralUndo(RichEditView& editor) {
+    editor.SetText(L"");
+    SendMessageW(editor.GetHwnd(), EM_EMPTYUNDOBUFFER, 0, 0);
+    std::vector<std::wstring> states;
+    auto checkpoint = [&](const char* name) {
+        const auto text = TableStory(editor);
+        states.push_back(text);
+        std::cout << name << " text=" << text.size() << std::endl;
+        CheckBottomBorders(editor, "Mixed edits must retain table bottom borders");
+        CheckUniformWidths(editor, "Mixed edits must keep every row width identical");
+        std::cout << "  widths=";
+        for (const auto& row : TableWidths(editor)) { std::cout << '['; for (long width : row) std::cout << width << ','; std::cout << ']'; }
+        std::cout << std::endl;
+    };
+    auto selectFirstRowCell = [&](long column) {
+        const auto text = TableStory(editor);
+        const auto marker = text.find(L'\xfff9');
+        Check(marker != std::wstring::npos, "Mixed edits must retain a table row");
+        size_t position = marker + 2;
+        for (long current = 0; current < column; ++current) {
+            const auto cell = text.find(L'\a', position);
+            Check(cell != std::wstring::npos, "Mixed edits must find the requested cell");
+            position = cell + 1;
+        }
+        editor.SelectRange(static_cast<LONG>(position), static_cast<LONG>(position));
+    };
+    Check(editor.InsertTable(2, 3), "Mixed: insert table failed"); checkpoint("mixed-table");
+    selectFirstRowCell(2); Check(editor.InsertTableRow(true), "Mixed: insert row 1 failed"); checkpoint("mixed-row-1");
+    selectFirstRowCell(2); Check(editor.DeleteTableColumn(), "Mixed: delete column 1 failed"); checkpoint("mixed-delete-column-1");
+    selectFirstRowCell(1); Check(editor.InsertTableRow(true), "Mixed: insert row 2 failed"); checkpoint("mixed-row-2");
+    selectFirstRowCell(1); Check(editor.InsertTableRow(true), "Mixed: insert row 3 failed"); checkpoint("mixed-row-3");
+    selectFirstRowCell(1); Check(editor.DeleteTableColumn(), "Mixed: delete column 2 failed"); checkpoint("mixed-delete-column-2");
+    selectFirstRowCell(0); Check(editor.InsertTableRow(true), "Mixed: insert row 4 failed"); checkpoint("mixed-row-4");
+    selectFirstRowCell(0); Check(editor.InsertTableColumn(true), "Mixed: insert column failed"); checkpoint("mixed-insert-column");
+    selectFirstRowCell(1); Check(editor.InsertTableRow(true), "Mixed: insert row 5 failed"); checkpoint("mixed-row-5");
+    for (size_t i = states.size() - 1; i > 0; --i) {
+        editor.Undo();
+        Check(TableStory(editor) == states[i - 1], "Mixed undo must restore the prior story");
+        CheckBottomBorders(editor, "Mixed undo must retain table bottom borders");
+        CheckUniformWidths(editor, "Mixed undo must keep every row width identical");
+    }
+    for (size_t i = 1; i < states.size(); ++i) {
+        editor.Redo();
+        Check(TableStory(editor) == states[i], "Mixed redo must restore the next story");
+        CheckUniformWidths(editor, "Mixed redo must keep every row width identical");
+    }
+}
+
 void Run(RichEditView& editor) {
     editor.SetText(L"");
     Check(editor.InsertTable(3, 3), "Insert table failed");
@@ -211,6 +377,8 @@ int main() {
         try {
             Check(editor.Initialize(host, 0, 0, 850, 560, 100), "Editor creation failed");
             ShowWindow(host, SW_SHOWNOACTIVATE);
+            CheckStructuralUndo(editor);
+            CheckMixedStructuralUndo(editor);
             Run(editor);
             CheckGeometry(editor);
             std::cout << "[PASS] Table editing\n";

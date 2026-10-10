@@ -10,11 +10,116 @@
 #include <gdiplus.h>
 #include <tom.h>
 #include <wrl/client.h>
+#include <fstream>
+#include <mutex>
+#include <cstdlib>
 
 
 namespace anynote::ui {
 
 namespace {
+
+std::mutex g_diagnosticsMutex;
+
+void WriteEditorDiagnostic(const char* operation, long textLength, long codeBlocks,
+    unsigned long long refreshCount, unsigned long long appliedCount, long width = -1) {
+    char* localAppData = nullptr;
+    size_t length = 0;
+    if (_dupenv_s(&localAppData, &length, "LOCALAPPDATA") != 0 || !localAppData) return;
+    std::filesystem::path path = std::filesystem::path(localAppData) / "AnyNote" / "diagnostics.log";
+    free(localAppData);
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::lock_guard lock(g_diagnosticsMutex);
+    std::ofstream out(path, std::ios::app);
+    if (!out) return;
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    out << now.wYear << '-' << now.wMonth << '-' << now.wDay << ' '
+        << now.wHour << ':' << now.wMinute << ':' << now.wSecond << '.'
+        << now.wMilliseconds << " op=" << operation
+        << " text=" << textLength << " codeblocks=" << codeBlocks
+        << " refresh=" << refreshCount << " applied=" << appliedCount;
+    if (width >= 0) out << " width=" << width;
+    out << '\n';
+}
+
+long CountCodeBlockMarkers(const std::wstring& text) {
+    long count = 0;
+    size_t pos = 0;
+    while ((pos = text.find(L"[lang:", pos)) != std::wstring::npos) {
+        ++count;
+        pos += 6;
+    }
+    return count;
+}
+
+// Keep a multi-row table mutation as one RichEdit undo unit.  Without this,
+// changing every row in a column creates one structural undo record per row,
+// so Ctrl+Z can expose partially restored table geometry to RichEdit's layout
+// engine.
+class TableEditCollection {
+public:
+    TableEditCollection(ITextDocument2* document, HWND window)
+        : m_document(document), m_window(window) {
+        if (!m_document) return;
+        m_document->AddRef();
+        SendMessageW(m_window, EM_STOPGROUPTYPING, 0, 0);
+        m_active = SUCCEEDED(m_document->BeginEditCollection());
+        long count = 0;
+        m_frozen = SUCCEEDED(m_document->Freeze(&count));
+    }
+
+    ~TableEditCollection() {
+        if (!m_document) return;
+        if (m_active) m_document->EndEditCollection();
+        if (m_frozen) {
+            long count = 0;
+            m_document->Unfreeze(&count);
+        }
+        m_document->Release();
+        InvalidateRect(m_window, nullptr, FALSE);
+    }
+
+    TableEditCollection(const TableEditCollection&) = delete;
+    TableEditCollection& operator=(const TableEditCollection&) = delete;
+
+private:
+    ITextDocument2* m_document = nullptr;
+    HWND m_window = nullptr;
+    bool m_active = false;
+    bool m_frozen = false;
+};
+
+struct TableRowLayout {
+    long indent = 144;
+    long height = 720;
+    std::vector<long> widths;
+};
+
+bool ReadTableRowLayout(ITextDocument2* document, long position, TableRowLayout& layout) {
+    Microsoft::WRL::ComPtr<ITextRange2> range;
+    Microsoft::WRL::ComPtr<ITextRow> row;
+    if (FAILED(document->Range2(position, position, &range)) || FAILED(range->GetRow(&row))) return false;
+    long count = 0;
+    if (FAILED(row->GetCellCount(&count)) || count <= 0) return false;
+    row->GetIndent(&layout.indent);
+    row->GetHeight(&layout.height);
+    layout.widths.clear();
+    for (long column = 0; column < count; ++column) {
+        long width = 0;
+        if (FAILED(row->SetCellIndex(column)) || FAILED(row->GetCellWidth(&width)) || width <= 0) return false;
+        layout.widths.push_back(width);
+    }
+    return true;
+}
+
+bool SetTableRowWidths(ITextRow* row, const std::vector<long>& widths) {
+    for (long column = 0; column < static_cast<long>(widths.size()); ++column) {
+        if (FAILED(row->SetCellIndex(column)) || FAILED(row->SetCellWidth(widths[column]))) return false;
+    }
+    return true;
+}
 
 int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
     UINT num = 0;
@@ -182,6 +287,13 @@ static LRESULT CALLBACK RichEditSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam
            (wParam == 'X' || wParam == 'V' || wParam == 'Z' || wParam == 'Y')))));
     if (shouldRefreshCodeLayout) {
         // Normalize only after the complete edit, without adding layout to undo history.
+        pThis->MarkLayoutFormattingNeeded();
+        const char* operation = "edit";
+        if (uMsg == EM_UNDO || uMsg == WM_UNDO || (uMsg == WM_KEYDOWN && wParam == 'Z')) operation = "undo";
+        else if (uMsg == EM_REDO || (uMsg == WM_KEYDOWN && wParam == 'Y')) operation = "redo";
+        else if (uMsg == WM_PASTE || uMsg == EM_PASTESPECIAL) operation = "paste";
+        else if (uMsg == WM_CUT) operation = "cut";
+        pThis->RecordEditDiagnostic(operation);
         pThis->RefreshCodeBlockLayout();
         pThis->UpdateHoverBarPosition();
     }
@@ -357,7 +469,15 @@ void RichEditView::SetText(const std::wstring& text) {
     if (!m_hWnd) return;
     m_hoverBar.Hide();
     m_hasCodeBlocks = (text.find(L"[lang:") != std::wstring::npos);
+    m_layoutFormattingNeeded = true;
+    m_lastLayoutWidth = -1;
     SetWindowTextW(m_hWnd, text.c_str());
+}
+
+void RichEditView::RecordEditDiagnostic(const char* operation) {
+    const std::wstring text = GetText();
+    WriteEditorDiagnostic(operation, static_cast<long>(text.size()), CountCodeBlockMarkers(text),
+        m_layoutRefreshCount, m_layoutAppliedCount);
 }
 
 std::wstring RichEditView::GetText() const {
@@ -398,6 +518,8 @@ bool RichEditView::StreamInRTF(std::string_view rtfData) {
 
     m_hoverBar.Hide();
     m_hasCodeBlocks = (rtfData.find("[lang:") != std::string_view::npos);
+    m_layoutFormattingNeeded = true;
+    m_lastLayoutWidth = -1;
     StreamInCookie cookie{rtfData.data(), rtfData.size()};
     EDITSTREAM es = {};
     es.dwCookie = reinterpret_cast<DWORD_PTR>(&cookie);
@@ -1137,6 +1259,7 @@ bool RichEditView::SwitchCodeBlockLanguage(const CodeBlockInfo& info, common::Co
 
 void RichEditView::RefreshCodeBlockLayout() {
     if (!m_hWnd || m_updatingCodeLayout) return;
+    ++m_layoutRefreshCount;
     // 普通 RichEdit 粘贴不会经过 StreamInRTF/InsertCodeBlock，首次编辑时
     // 需要从当前文本重新检测代码块，否则布局归一化会被旧标志提前跳过。
     if (!m_hasCodeBlocks) {
@@ -1166,14 +1289,21 @@ void RichEditView::RefreshCodeBlockLayout() {
     SendMessageW(m_hWnd, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
     const UINT dpi = std::max(96U, GetDpiForWindow(m_hWnd));
     const long width = std::max(600, MulDiv(format.right - format.left - 2, 1440, dpi));
+    const bool applyFormatting = m_layoutFormattingNeeded || m_lastLayoutWidth != width;
+    if (!applyFormatting) {
+        WriteEditorDiagnostic("layout-skip", length, m_codeBlockCount, m_layoutRefreshCount, m_layoutAppliedCount, width);
+        return;
+    }
     const LRESULT modified = SendMessageW(m_hWnd, EM_GETMODIFY, 0, 0);
     const LRESULT events = SendMessageW(m_hWnd, EM_GETEVENTMASK, 0, 0);
     m_updatingCodeLayout = true;
     SendMessageW(m_hWnd, EM_SETEVENTMASK, 0, 0);
     long freezeCount = 0;
     doc->Freeze(&freezeCount);
-    doc->Undo(tomSuspend, nullptr);
+    long suspendCount = 0;
+    doc->Undo(tomSuspend, &suspendCount);
     long next = 0;
+    long codeBlockCount = 0;
     while (next < static_cast<long>(text.size())) {
         const size_t match = text.find(L"[lang:", static_cast<size_t>(next));
         if (match == std::wstring::npos) break;
@@ -1181,6 +1311,7 @@ void RichEditView::RefreshCodeBlockLayout() {
         next = start + 6;
         CodeBlockInfo info;
         if (!GetCodeBlockAt(start, &info)) continue;
+        ++codeBlockCount;
         next = std::max(next, info.tableEnd);
         ComPtr<ITextRange2> range;
         ComPtr<ITextRow> row;
@@ -1223,11 +1354,17 @@ void RichEditView::RefreshCodeBlockLayout() {
         para.Reset();
         if (SUCCEEDED(range->GetPara(&para))) para->SetSpaceAfter(10);
     }
-    doc->Undo(tomResume, nullptr);
+    long resumeCount = 0;
+    doc->Undo(tomResume, &resumeCount);
     doc->Unfreeze(&freezeCount);
     SendMessageW(m_hWnd, EM_SETMODIFY, modified, 0);
     SendMessageW(m_hWnd, EM_SETEVENTMASK, 0, events);
     m_updatingCodeLayout = false;
+    m_lastLayoutWidth = width;
+    m_layoutFormattingNeeded = false;
+    m_codeBlockCount = codeBlockCount;
+    ++m_layoutAppliedCount;
+    WriteEditorDiagnostic("layout-apply", length, codeBlockCount, m_layoutRefreshCount, m_layoutAppliedCount, width);
     InvalidateRect(m_hWnd, nullptr, FALSE);
 }
 
@@ -1509,6 +1646,7 @@ bool RichEditView::InsertTable(int rows, int cols) {
     ITextDocument2* pDoc2 = nullptr;
     bool ok = false;
     if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        TableEditCollection editCollection(pDoc2, m_hWnd);
         ITextSelection* pSel = nullptr;
         if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
             long cpMin = 0;
@@ -1529,6 +1667,7 @@ bool RichEditView::InsertTable(int rows, int cols) {
                     }
                     if (SUCCEEDED(pRow->Insert(rows))) {
                         ok = true;
+                        RecordEditDiagnostic("table-insert");
                         pSel->SetRange(cpMin, cpMin);
                         long delta = 0;
                         pSel->Expand(tomTable, &delta);
@@ -1580,6 +1719,7 @@ bool RichEditView::InsertTableRow(bool below) {
     ITextDocument2* pDoc2 = nullptr;
     bool ok = false;
     if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        TableEditCollection editCollection(pDoc2, m_hWnd);
         ITextSelection* pSel = nullptr;
         if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
             long curCp = 0;
@@ -1603,31 +1743,34 @@ bool RichEditView::InsertTableRow(bool below) {
                 rowEnd++;
             }
 
-            int numCells = 0;
-            for (int i = rowStart; i < rowEnd; ++i) {
-                if ((unsigned short)text[i] == 0x07) {
-                    numCells++;
-                }
-            }
-            if (numCells == 0) numCells = 3;
+            // Use the table's existing column boundaries. Recomputing 7200 / count
+            // here widens new rows after a column has been removed.
+            TableRowLayout layout;
+            Microsoft::WRL::ComPtr<ITextRange2> tableRange;
+            long tableStart = rowStart, tableDelta = 0;
+            const bool haveLayout = SUCCEEDED(pDoc2->Range2(rowStart, rowStart, &tableRange))
+                && SUCCEEDED(tableRange->Expand(tomTable, &tableDelta))
+                && SUCCEEDED(tableRange->GetStart(&tableStart))
+                && ReadTableRowLayout(pDoc2, tableStart, layout);
 
             int insPos = below ? (rowEnd + 2) : rowStart;
             ITextRange2* pInsRange = nullptr;
-            if (SUCCEEDED(pDoc2->Range2(insPos, insPos, &pInsRange))) {
+            if (haveLayout && SUCCEEDED(pDoc2->Range2(insPos, insPos, &pInsRange))) {
                 ITextRow* pRow = nullptr;
                 if (SUCCEEDED(pInsRange->GetRow(&pRow))) {
-                    pRow->SetIndent(144);
-                    pRow->SetCellCount(numCells);
-                    pRow->SetHeight(720);
-                    int perColWidth = std::max(1200, 7200 / numCells);
-                    for (int c = 0; c < numCells; ++c) {
+                    const long numCells = static_cast<long>(layout.widths.size());
+                    bool configured = SUCCEEDED(pRow->SetIndent(layout.indent))
+                        && SUCCEEDED(pRow->SetCellCount(numCells))
+                        && SUCCEEDED(pRow->SetHeight(layout.height))
+                        && SetTableRowWidths(pRow, layout.widths);
+                    for (long c = 0; configured && c < numCells; ++c) {
                         pRow->SetCellIndex(c);
-                        pRow->SetCellWidth(perColWidth);
-                        pRow->SetCellBorderWidths(15, 15, 15, 15);
-                        pRow->SetCellBorderColors(RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234));
+                        configured = SUCCEEDED(pRow->SetCellBorderWidths(15, 15, 15, 15))
+                            && SUCCEEDED(pRow->SetCellBorderColors(RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234), RGB(226, 230, 234)));
                     }
-                    if (SUCCEEDED(pRow->Insert(1))) {
+                    if (configured && SUCCEEDED(pRow->Insert(1))) {
                         ok = true;
+                        RecordEditDiagnostic("table-insert-row");
                         pSel->SetRange(insPos + 2, insPos + 2);
                     }
                     pRow->Release();
@@ -1703,6 +1846,7 @@ bool RichEditView::DeleteTableRow() {
                 return DeleteTable();
             }
 
+            TableEditCollection editCollection(pDoc2, m_hWnd);
             ITextRange* pDelRange = nullptr;
             int delEnd = (rowEnd + 2 <= len) ? (rowEnd + 2) : rowEnd;
             if (SUCCEEDED(pDoc2->Range(rowStart, delEnd, &pDelRange))) {
@@ -1710,6 +1854,7 @@ bool RichEditView::DeleteTableRow() {
                 pDelRange->Delete(tomCharacter, 0, &delta);
                 pDelRange->Release();
                 ok = true;
+                RecordEditDiagnostic("table-delete-row");
             }
 
             SysFreeString(text);
@@ -1732,12 +1877,14 @@ bool RichEditView::DeleteTable() {
     ITextDocument2* pDoc2 = nullptr;
     bool ok = false;
     if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        TableEditCollection editCollection(pDoc2, m_hWnd);
         ITextSelection* pSel = nullptr;
         if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
             long delta = 0;
             if (SUCCEEDED(pSel->Expand(tomTable, &delta))) {
                 pSel->Delete(tomCharacter, 0, &delta);
                 ok = true;
+                RecordEditDiagnostic("table-delete");
             }
             pSel->Release();
         }
@@ -1757,6 +1904,7 @@ bool RichEditView::InsertTableColumn(bool right) {
     ITextDocument2* pDoc2 = nullptr;
     bool ok = false;
     if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        TableEditCollection editCollection(pDoc2, m_hWnd);
         ITextSelection* pSel = nullptr;
         if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
             long curCp = 0;
@@ -1778,8 +1926,10 @@ bool RichEditView::InsertTableColumn(bool right) {
             for (int i = static_cast<int>(tableStart); i < tableEnd && i < len; ++i)
                 if ((unsigned short)text[i] == 0xfff9) rows.push_back(i);
             int targetCol = 0;
-            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i)
-                if ((unsigned short)text[i] == 0x07) ++targetCol;
+            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i) {
+                if ((unsigned short)text[i] == 0xfff9) targetCol = 0;
+                else if ((unsigned short)text[i] == 0x07) ++targetCol;
+            }
             for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
                 ITextRange2* pRowRange = nullptr; ITextRow* pRow = nullptr;
                 if (SUCCEEDED(pDoc2->Range2(*it, *it, &pRowRange)) && SUCCEEDED(pRowRange->GetRow(&pRow))) {
@@ -1796,6 +1946,7 @@ bool RichEditView::InsertTableColumn(bool right) {
             SysFreeString(text);
             pDocRange->Release();
             pSel->Release();
+            if (ok) RecordEditDiagnostic("table-insert-column");
         }
         pDoc2->Release();
     }
@@ -1813,6 +1964,7 @@ bool RichEditView::DeleteTableColumn() {
     ITextDocument2* pDoc2 = nullptr;
     bool ok = false;
     if (SUCCEEDED(pUnk->QueryInterface(__uuidof(ITextDocument2), reinterpret_cast<void**>(&pDoc2)))) {
+        TableEditCollection editCollection(pDoc2, m_hWnd);
         ITextSelection* pSel = nullptr;
         if (SUCCEEDED(pDoc2->GetSelection(&pSel))) {
             long curCp = 0;
@@ -1834,15 +1986,23 @@ bool RichEditView::DeleteTableColumn() {
             for (int i = static_cast<int>(tableStart); i < tableEnd && i < len; ++i)
                 if ((unsigned short)text[i] == 0xfff9) rows.push_back(i);
             int curCol = 0;
-            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i)
-                if ((unsigned short)text[i] == 0x07) ++curCol;
+            for (int i = static_cast<int>(tableStart); i < curCp && i < len; ++i) {
+                if ((unsigned short)text[i] == 0xfff9) curCol = 0;
+                else if ((unsigned short)text[i] == 0x07) ++curCol;
+            }
             for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
                 ITextRange2* pRowRange = nullptr; ITextRow* pRow = nullptr;
                 if (SUCCEEDED(pDoc2->Range2(*it, *it, &pRowRange)) && SUCCEEDED(pRowRange->GetRow(&pRow))) {
                     long count = 0;
                     if (SUCCEEDED(pRow->GetCellCount(&count)) && count > 1 && curCol < count) {
                         pRow->SetCellIndex(curCol);
-                        if (SUCCEEDED(pRow->SetCellCount(count - 1)) && SUCCEEDED(pRow->Apply(1, tomCellStructureChangeOnly))) ok = true;
+                        if (SUCCEEDED(pRow->SetCellCount(count - 1))) {
+                            // Deleting the last cell leaves TOM's active-cell index
+                            // outside the new row unless it is clamped first.
+                            const long newIndex = std::min(static_cast<long>(curCol), count - 2);
+                            if (SUCCEEDED(pRow->SetCellIndex(newIndex)) &&
+                                SUCCEEDED(pRow->Apply(1, tomCellStructureChangeOnly))) ok = true;
+                        }
                     }
                     pRow->Release();
                 }
@@ -1852,6 +2012,7 @@ bool RichEditView::DeleteTableColumn() {
             SysFreeString(text);
             pDocRange->Release();
             pSel->Release();
+            if (ok) RecordEditDiagnostic("table-delete-column");
         }
         pDoc2->Release();
     }
@@ -1876,11 +2037,59 @@ bool RichEditView::GetTableCellAlignment(int* pHorzAlign, int* pVertAlign) const
 }
 
 void RichEditView::Undo() {
-    if (m_hWnd) SendMessageW(m_hWnd, EM_UNDO, 0, 0);
+    if (!m_hWnd) return;
+    m_tableEditor.ClearSelection();
+    Microsoft::WRL::ComPtr<IUnknown> ole;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(ole.GetAddressOf()));
+    Microsoft::WRL::ComPtr<ITextDocument2> document;
+    if (!ole || FAILED(ole.As(&document))) {
+        SendMessageW(m_hWnd, EM_UNDO, 0, 0);
+        return;
+    }
+
+    long freezeCount = 0;
+    const HRESULT freezeResult = document->Freeze(&freezeCount);
+    long undoCount = 0;
+    const HRESULT undoResult = SUCCEEDED(freezeResult)
+        ? document->Undo(1, &undoCount)
+        : E_FAIL;
+    if (SUCCEEDED(freezeResult)) document->Unfreeze(&freezeCount);
+    if (SUCCEEDED(undoResult)) {
+        MarkLayoutFormattingNeeded();
+        RecordEditDiagnostic("undo");
+        RefreshCodeBlockLayout();
+        UpdateHoverBarPosition();
+        RedrawWindow(m_hWnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
 }
 
 void RichEditView::Redo() {
-    if (m_hWnd) SendMessageW(m_hWnd, EM_REDO, 0, 0);
+    if (!m_hWnd) return;
+    m_tableEditor.ClearSelection();
+    Microsoft::WRL::ComPtr<IUnknown> ole;
+    SendMessageW(m_hWnd, EM_GETOLEINTERFACE, 0, reinterpret_cast<LPARAM>(ole.GetAddressOf()));
+    Microsoft::WRL::ComPtr<ITextDocument2> document;
+    if (!ole || FAILED(ole.As(&document))) {
+        SendMessageW(m_hWnd, EM_REDO, 0, 0);
+        return;
+    }
+
+    long freezeCount = 0;
+    const HRESULT freezeResult = document->Freeze(&freezeCount);
+    long redoCount = 0;
+    const HRESULT redoResult = SUCCEEDED(freezeResult)
+        ? document->Redo(1, &redoCount)
+        : E_FAIL;
+    if (SUCCEEDED(freezeResult)) document->Unfreeze(&freezeCount);
+    if (SUCCEEDED(redoResult)) {
+        MarkLayoutFormattingNeeded();
+        RecordEditDiagnostic("redo");
+        RefreshCodeBlockLayout();
+        UpdateHoverBarPosition();
+        RedrawWindow(m_hWnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    }
 }
 
 void RichEditView::Cut() {

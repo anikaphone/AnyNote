@@ -59,6 +59,14 @@ set(SOURCES
 
 add_executable(AnyNote WIN32 ${SOURCES})
 
+if (MSVC)
+    # Keep a Release PDB beside AnyNote.exe so WER dumps can be symbolized.
+    target_compile_options(AnyNote PRIVATE $<$<CONFIG:Release>:/Zi>)
+    target_link_options(AnyNote PRIVATE $<$<CONFIG:Release>:/DEBUG:FULL>)
+    set_property(TARGET AnyNote PROPERTY
+        MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Release>:ProgramDatabase>")
+endif()
+
 target_include_directories(AnyNote PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
