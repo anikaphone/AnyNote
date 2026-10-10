@@ -1,0 +1,34 @@
+{
+  "protocol_version": 1,
+  "schema_version": 1,
+  "uid": "0123456789abcdef",
+  "name": "中文 😀",
+  "nodes": [
+    {
+      "sync_id": "00000000-0000-4000-8000-000000000001",
+      "source_id": "9223372036854775807",
+      "parent_sync_id": null,
+      "sequence": 0,
+      "title": "根节点",
+      "node_type": 0,
+      "created_time": "0",
+      "modified_time": "1791590400",
+      "format_type": 1,
+      "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "rtf_base64": ""
+    },
+    {
+      "sync_id": "00000000-0000-4000-8000-000000000002",
+      "source_id": "2",
+      "parent_sync_id": "00000000-0000-4000-8000-000000000001",
+      "sequence": 0,
+      "title": "空内容\u0000与转义",
+      "node_type": 0,
+      "created_time": "0",
+      "modified_time": "9223372036854775807",
+      "format_type": 1,
+      "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "rtf_base64": ""
+    }
+  ]
+}

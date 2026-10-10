@@ -1,4 +1,6 @@
 #include "Database.h"
+#include "VaultFileLease.h"
+#include "SchemaMigrator.h"
 #include "common/StringUtils.h"
 #include <sqlite3.h>
 #include <sqlite3mc.h>
@@ -15,7 +17,8 @@ Database::Database(Database&& other) noexcept
     : m_db(other.m_db)
     , m_filePath(std::move(other.m_filePath))
     , m_lastError(std::move(other.m_lastError))
-    , m_isEncrypted(other.m_isEncrypted) {
+    , m_isEncrypted(other.m_isEncrypted)
+    , m_fileLease(std::move(other.m_fileLease)) {
     other.m_db = nullptr;
 }
 
@@ -26,6 +29,7 @@ Database& Database::operator=(Database&& other) noexcept {
         m_filePath = std::move(other.m_filePath);
         m_lastError = std::move(other.m_lastError);
         m_isEncrypted = other.m_isEncrypted;
+        m_fileLease = std::move(other.m_fileLease);
         other.m_db = nullptr;
     }
     return *this;
@@ -36,6 +40,9 @@ bool Database::Open(const std::wstring& filePath, const std::string& password) {
     m_filePath = filePath;
     m_lastError.clear();
     m_isEncrypted = false;
+
+    try { m_fileLease = VaultFileLease::Acquire(filePath); }
+    catch (const std::exception& error) { m_lastError = error.what(); return false; }
 
     std::string utf8Path = anynote::utils::WideToUtf8(filePath);
 
@@ -90,12 +97,22 @@ bool Database::Open(const std::wstring& filePath, const std::string& password) {
         return false;
     }
 
+    {
+        Statement version;
+        if (!version.Prepare(*this, "PRAGMA user_version") || version.Step() != SQLITE_ROW ||
+            version.GetInt(0) > SchemaMigrator::CurrentVersion) {
+            m_lastError = "UNSUPPORTED_SCHEMA_VERSION";
+            Close();
+            return false;
+        }
+    }
+
     // 开启 WAL、外键与常规同步模式；任何失败都不能继续伪装成可写数据库。
     if (!Execute("PRAGMA journal_mode = WAL;")) {
         Close();
         return false;
     }
-    if (!Execute("PRAGMA foreign_keys = ON;") || !Execute("PRAGMA synchronous = NORMAL;")) {
+    if (!Execute("PRAGMA foreign_keys = ON;") || !Execute("PRAGMA synchronous = FULL;")) {
         Close();
         return false;
     }
@@ -108,6 +125,29 @@ void Database::Close() {
         sqlite3_close_v2(m_db);
         m_db = nullptr;
     }
+    m_fileLease.reset();
+}
+
+bool Database::CheckpointAndClose() {
+    if (!m_db) return true;
+    if (sqlite3_next_stmt(m_db, nullptr) || !sqlite3_get_autocommit(m_db)) {
+        m_lastError = "BACKUP_DATABASE_BUSY";
+        return false;
+    }
+    int frames = 0, checkpointed = 0;
+    int rc = sqlite3_wal_checkpoint_v2(m_db, nullptr, SQLITE_CHECKPOINT_TRUNCATE, &frames, &checkpointed);
+    if (rc != SQLITE_OK || frames != checkpointed) {
+        m_lastError = "BACKUP_CHECKPOINT_FAILED";
+        return false;
+    }
+    rc = sqlite3_close(m_db);
+    if (rc != SQLITE_OK) {
+        m_lastError = "BACKUP_CLOSE_FAILED";
+        return false;
+    }
+    m_db = nullptr;
+    m_fileLease.reset();
+    return true;
 }
 
 bool Database::SetPassword(const std::string& newPassword) {
@@ -175,7 +215,7 @@ Database::Statement::~Statement() {
 }
 
 Database::Statement::Statement(Statement&& other) noexcept
-    : m_stmt(other.m_stmt) {
+    : m_stmt(other.m_stmt), m_fileLease(std::move(other.m_fileLease)) {
     other.m_stmt = nullptr;
 }
 
@@ -185,6 +225,7 @@ Database::Statement& Database::Statement::operator=(Statement&& other) noexcept 
             sqlite3_finalize(m_stmt);
         }
         m_stmt = other.m_stmt;
+        m_fileLease = std::move(other.m_fileLease);
         other.m_stmt = nullptr;
     }
     return *this;
@@ -196,7 +237,9 @@ bool Database::Statement::Prepare(Database& db, const std::string& sql) {
         m_stmt = nullptr;
     }
 
+    m_fileLease.reset();
     if (!db.GetRawHandle()) return false;
+    m_fileLease = db.m_fileLease;
 
     int rc = sqlite3_prepare_v2(db.GetRawHandle(), sql.c_str(), -1, &m_stmt, nullptr);
     if (rc != SQLITE_OK) {

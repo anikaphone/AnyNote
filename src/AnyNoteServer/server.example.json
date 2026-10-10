@@ -1,0 +1,9 @@
+{
+  "listen": "127.0.0.1:8443",
+  "data_dir": "data",
+  "cert_file": "certs/server.crt",
+  "key_file": "certs/server.key",
+  "registration_enabled": false,
+  "account_vaults": 100,
+  "account_bytes": 1073741824
+}

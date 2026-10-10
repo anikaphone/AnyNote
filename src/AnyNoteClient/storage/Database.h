@@ -9,6 +9,7 @@ struct sqlite3;
 struct sqlite3_stmt;
 
 namespace anynote::storage {
+class VaultFileLease;
 
 class Database {
 public:
@@ -24,6 +25,10 @@ public:
     // 打开或创建数据库文件 (可选传入密码，若库已加密则解密打开)
     bool Open(const std::wstring& filePath, const std::string& password = "");
     void Close();
+    // Requires exclusive application ownership of this vault across processes.
+    // Refuses live statements/transactions/readers; intended for a subsequent
+    // closed-file backup, never for copying an active WAL database.
+    bool CheckpointAndClose();
 
     bool IsOpen() const noexcept { return m_db != nullptr; }
     const std::wstring& GetFilePath() const noexcept { return m_filePath; }
@@ -80,13 +85,16 @@ public:
 
     private:
         sqlite3_stmt* m_stmt = nullptr;
+        std::shared_ptr<VaultFileLease> m_fileLease;
     };
 
 private:
+    friend class SchemaMigrator;
     sqlite3* m_db = nullptr;
     std::wstring m_filePath;
     std::string m_lastError;
     bool m_isEncrypted = false;
+    std::shared_ptr<VaultFileLease> m_fileLease;
 };
 
 } // namespace anynote::storage

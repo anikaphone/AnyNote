@@ -1,0 +1,45 @@
+[
+  {
+    "descriptor": {
+      "method": "DELETE",
+      "payload": null,
+      "path": "/api/v1/vaults/0123456789abcdef",
+      "precondition": {
+        "expected_revision": "9223372036854775807",
+        "expected_epoch": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "sha256": "e498b1e85ba26c92fd828d385e3b0320ea3c37a4d8f73b2e85eb00d1c9590df6"
+  },
+  {
+    "descriptor": {
+      "method": "PUT",
+      "payload": {
+        "name": "中文😀\u0000\n",
+        "protocol_version": 1,
+        "nodes": [],
+        "uid": "0123456789abcdef",
+        "schema_version": 1
+      },
+      "path": "/api/v1/vaults/0123456789abcdef/snapshot",
+      "precondition": {
+        "create_only": true
+      }
+    },
+    "sha256": "863e577d333264fe296a1d191d83076dadb9f1c386936df8f94f21bae9295fbd"
+  },
+  {
+    "descriptor": {
+      "method": "PATCH",
+      "payload": {
+        "remark": "a:b;\"<&>"
+      },
+      "path": "/api/v1/vaults/0123456789abcdef/remark",
+      "precondition": {
+        "expected_revision": "1",
+        "expected_epoch": "00000000-0000-4000-8000-000000000001"
+      }
+    },
+    "sha256": "2d7902565ffa18aade566efc3bbc1479b61b55090792573eb949e8ad49a5f99e"
+  }
+]

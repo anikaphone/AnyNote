@@ -14,6 +14,8 @@ add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 
 # 寻找 sqlite3mc (vcpkg 静态库配置)
 find_package(sqlite3mc CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
+find_package(CURL CONFIG REQUIRED)
 
 # 源码与资源列表
 set(SOURCES
@@ -194,3 +196,98 @@ target_link_libraries(test_outline PRIVATE
 set_property(TARGET test_outline PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
+
+# P0 synchronization probes are independent of user vaults and UI state.
+add_library(anynote_sync_protocol STATIC
+    src/AnyNoteClient/sync/SyncProtocol.cpp
+    src/AnyNoteClient/sync/DiffEngine.cpp
+    src/AnyNoteClient/sync/RequestIdentity.cpp
+    src/AnyNoteClient/common/Identity.cpp
+)
+target_include_directories(anynote_sync_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient)
+target_link_libraries(anynote_sync_protocol PUBLIC nlohmann_json::nlohmann_json bcrypt crypt32)
+add_executable(test_sync_protocol tests/test_sync_protocol.cpp)
+target_link_libraries(test_sync_protocol PRIVATE anynote_sync_protocol psapi)
+add_executable(test_sync_storage tests/test_sync_storage.cpp src/AnyNoteClient/storage/Database.cpp)
+target_include_directories(test_sync_storage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient)
+target_link_libraries(test_sync_storage PRIVATE sqlite3mc::sqlite3mc_static)
+add_executable(test_sync_tls tests/test_sync_tls.cpp)
+target_link_libraries(test_sync_tls PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
+foreach(target anynote_sync_protocol test_sync_protocol test_sync_storage test_sync_tls)
+    set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endforeach()
+
+
+add_executable(test_sync_migration tests/test_sync_migration.cpp
+    src/AnyNoteClient/storage/Database.cpp
+    src/AnyNoteClient/storage/NoteRepository.cpp
+    src/AnyNoteClient/storage/SchemaMigrator.cpp
+    src/AnyNoteClient/storage/VaultFileLease.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp)
+target_link_libraries(test_sync_migration PRIVATE anynote_sync_protocol sqlite3mc::sqlite3mc_static)
+set_property(TARGET test_sync_migration PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+foreach(target AnyNote test_storage test_node_search test_sync_storage)
+    target_sources(${target} PRIVATE
+        src/AnyNoteClient/storage/SchemaMigrator.cpp
+        src/AnyNoteClient/storage/VaultFileLease.cpp)
+    target_link_libraries(${target} PRIVATE anynote_sync_protocol)
+endforeach()
+
+foreach(target AnyNote test_storage test_node_search)
+    target_sources(${target} PRIVATE src/AnyNoteClient/storage/ConfigStore.cpp)
+endforeach()
+
+add_executable(test_sync_config tests/test_sync_config.cpp
+    src/AnyNoteClient/storage/VaultManager.cpp
+    src/AnyNoteClient/storage/ConfigStore.cpp
+    src/AnyNoteClient/storage/VaultFileLease.cpp)
+target_link_libraries(test_sync_config PRIVATE anynote_sync_protocol)
+set_property(TARGET test_sync_config PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+foreach(target AnyNote test_storage test_node_search test_sync_migration)
+    target_sources(${target} PRIVATE src/AnyNoteClient/storage/SnapshotService.cpp)
+endforeach()
+add_executable(test_sync_snapshot tests/test_sync_snapshot.cpp
+    src/AnyNoteClient/storage/Database.cpp
+    src/AnyNoteClient/storage/NoteRepository.cpp
+    src/AnyNoteClient/storage/SchemaMigrator.cpp
+    src/AnyNoteClient/storage/VaultFileLease.cpp
+    src/AnyNoteClient/storage/SnapshotService.cpp
+    src/AnyNoteClient/common/SyntaxHighlighter.cpp)
+target_link_libraries(test_sync_snapshot PRIVATE anynote_sync_protocol sqlite3mc::sqlite3mc_static)
+set_property(TARGET test_sync_snapshot PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+foreach(target AnyNote test_storage test_node_search)
+    target_sources(${target} PRIVATE src/AnyNoteClient/storage/VaultInstaller.cpp)
+endforeach()
+target_sources(test_sync_snapshot PRIVATE
+    src/AnyNoteClient/storage/VaultInstaller.cpp
+    src/AnyNoteClient/storage/VaultManager.cpp
+    src/AnyNoteClient/storage/ConfigStore.cpp)
+
+add_library(anynote_sync_client STATIC
+    src/AnyNoteClient/sync/SyncClient.cpp
+    src/AnyNoteClient/sync/SyncCoordinator.cpp
+    src/AnyNoteClient/sync/CredentialStore.cpp)
+target_link_libraries(anynote_sync_client PUBLIC anynote_sync_protocol CURL::libcurl)
+set_property(TARGET anynote_sync_client PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_link_libraries(AnyNote PRIVATE anynote_sync_client)
+add_executable(test_sync_client tests/test_sync_client.cpp
+    src/AnyNoteClient/storage/ConfigStore.cpp
+    src/AnyNoteClient/storage/VaultFileLease.cpp)
+target_link_libraries(test_sync_client PRIVATE anynote_sync_client psapi)
+set_property(TARGET test_sync_client PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+foreach(target AnyNote test_node_search)
+    target_sources(${target} PRIVATE
+        src/AnyNoteClient/ui/SyncDialogs.cpp
+        src/AnyNoteClient/ui/CloudSyncAccount.cpp
+        src/AnyNoteClient/ui/CloudSyncOperations.cpp
+        src/AnyNoteClient/ui/CloudSyncManage.cpp)
+    target_link_libraries(${target} PRIVATE anynote_sync_client)
+endforeach()
+
+get_target_property(SYNC_E2E_SOURCES test_sync_snapshot SOURCES)
+list(REMOVE_ITEM SYNC_E2E_SOURCES tests/test_sync_snapshot.cpp)
+add_executable(test_sync_e2e tests/test_sync_e2e.cpp ${SYNC_E2E_SOURCES})
+target_link_libraries(test_sync_e2e PRIVATE anynote_sync_client sqlite3mc::sqlite3mc_static)
+set_property(TARGET test_sync_e2e PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

@@ -1,0 +1,671 @@
+{
+  "$defs": {
+    "capabilities": {
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "additionalProperties": false,
+          "properties": {
+            "account_bytes": {
+              "$ref": "#/$defs/positive64"
+            },
+            "account_vaults": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "depth": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "json_bytes": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "node_bytes": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "nodes": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "vault_bytes": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "nodes",
+            "depth",
+            "node_bytes",
+            "vault_bytes",
+            "json_bytes",
+            "account_vaults",
+            "account_bytes"
+          ],
+          "type": "object"
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "schema_version": {
+          "const": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "schema_version",
+        "limits"
+      ],
+      "type": "object"
+    },
+    "credentials": {
+      "additionalProperties": false,
+      "properties": {
+        "password": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        },
+        "username": {
+          "pattern": "^[A-Za-z0-9_]{3,32}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "username",
+        "password"
+      ],
+      "type": "object"
+    },
+    "delete_write": {
+      "additionalProperties": false,
+      "properties": {
+        "precondition": {
+          "$ref": "#/$defs/existing_precondition"
+        }
+      },
+      "required": [
+        "precondition"
+      ],
+      "type": "object"
+    },
+    "error": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "additionalProperties": false,
+          "properties": {
+            "code": {
+              "enum": [
+                "INVALID_REQUEST",
+                "UNAUTHORIZED",
+                "NOT_FOUND",
+                "VERSION_CONFLICT",
+                "IDENTITY_CONFLICT",
+                "OPERATION_CONFLICT",
+                "LIMIT_EXCEEDED",
+                "HASH_MISMATCH",
+                "RATE_LIMITED",
+                "UNAVAILABLE",
+                "REGISTRATION_DISABLED"
+              ]
+            },
+            "message": {
+              "maxLength": 512,
+              "type": "string"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable"
+          ],
+          "type": "object"
+        },
+        "request_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "required": [
+        "request_id",
+        "error"
+      ],
+      "type": "object"
+    },
+    "existing_precondition": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/positive64"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_epoch",
+        "expected_revision"
+      ],
+      "type": "object"
+    },
+    "integer64": {
+      "description": "Canonical nonnegative decimal string, <= 9223372036854775807. Runtime validation enforces the numeric maximum.",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "type": "string"
+    },
+    "login_result": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "$ref": "#/$defs/positive64"
+        },
+        "expires_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "token": {
+          "pattern": "^[A-Za-z0-9_-]{43}$",
+          "type": "string"
+        },
+        "username": {
+          "pattern": "^[a-z0-9_]{3,32}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "account_id",
+        "username",
+        "token",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/metadata"
+          },
+          "maxItems": 20000,
+          "type": "array"
+        },
+        "vault": {
+          "$ref": "#/$defs/vault"
+        }
+      },
+      "required": [
+        "vault",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "created_time": {
+          "$ref": "#/$defs/integer64"
+        },
+        "format_type": {
+          "const": 1
+        },
+        "modified_time": {
+          "$ref": "#/$defs/integer64"
+        },
+        "node_type": {
+          "const": 0
+        },
+        "parent_sync_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "sequence": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "$ref": "#/$defs/positive64"
+        },
+        "sync_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "maxLength": 1024,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sync_id",
+        "source_id",
+        "parent_sync_id",
+        "sequence",
+        "title",
+        "node_type",
+        "created_time",
+        "modified_time",
+        "format_type",
+        "content_hash"
+      ],
+      "type": "object"
+    },
+    "node": {
+      "additionalProperties": false,
+      "properties": {
+        "content_hash": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "created_time": {
+          "$ref": "#/$defs/integer64"
+        },
+        "format_type": {
+          "const": 1
+        },
+        "modified_time": {
+          "$ref": "#/$defs/integer64"
+        },
+        "node_type": {
+          "const": 0
+        },
+        "parent_sync_id": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/uuid"
+            }
+          ]
+        },
+        "rtf_base64": {
+          "contentEncoding": "base64",
+          "maxLength": 22369624,
+          "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+          "type": "string"
+        },
+        "sequence": {
+          "maximum": 2147483647,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source_id": {
+          "$ref": "#/$defs/positive64"
+        },
+        "sync_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "title": {
+          "maxLength": 1024,
+          "type": "string"
+        }
+      },
+      "required": [
+        "sync_id",
+        "source_id",
+        "parent_sync_id",
+        "sequence",
+        "title",
+        "node_type",
+        "created_time",
+        "modified_time",
+        "format_type",
+        "content_hash",
+        "rtf_base64"
+      ],
+      "type": "object"
+    },
+    "operation_result": {
+      "additionalProperties": false,
+      "properties": {
+        "created": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deleted": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "operation_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/positive64"
+        },
+        "status": {
+          "enum": [
+            "committed"
+          ]
+        },
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "updated": {
+          "maximum": 20000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "status",
+        "uid",
+        "epoch",
+        "revision",
+        "created",
+        "updated",
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "password_write": {
+      "additionalProperties": false,
+      "properties": {
+        "new_password": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        },
+        "old_password": {
+          "maxLength": 128,
+          "minLength": 8,
+          "type": "string"
+        }
+      },
+      "required": [
+        "old_password",
+        "new_password"
+      ],
+      "type": "object"
+    },
+    "positive64": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/integer64"
+        },
+        {
+          "not": {
+            "const": "0"
+          }
+        }
+      ]
+    },
+    "precondition": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "create_only": {
+              "const": true
+            },
+            "operation_id": {
+              "$ref": "#/$defs/uuid"
+            }
+          },
+          "required": [
+            "operation_id",
+            "create_only"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expected_epoch": {
+              "$ref": "#/$defs/uuid"
+            },
+            "expected_revision": {
+              "$ref": "#/$defs/positive64"
+            },
+            "operation_id": {
+              "$ref": "#/$defs/uuid"
+            }
+          },
+          "required": [
+            "operation_id",
+            "expected_epoch",
+            "expected_revision"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "remark_write": {
+      "additionalProperties": false,
+      "properties": {
+        "precondition": {
+          "$ref": "#/$defs/existing_precondition"
+        },
+        "remark": {
+          "maxLength": 2000,
+          "type": "string"
+        }
+      },
+      "required": [
+        "precondition",
+        "remark"
+      ],
+      "type": "object"
+    },
+    "snapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/node"
+          },
+          "maxItems": 20000,
+          "type": "array"
+        },
+        "protocol_version": {
+          "const": 1
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "uid": {
+          "$ref": "#/$defs/uid"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "schema_version",
+        "uid",
+        "name",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "snapshot_result": {
+      "additionalProperties": false,
+      "properties": {
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "vault": {
+          "$ref": "#/$defs/vault"
+        }
+      },
+      "required": [
+        "vault",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "snapshot_write": {
+      "additionalProperties": false,
+      "properties": {
+        "precondition": {
+          "$ref": "#/$defs/precondition"
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        }
+      },
+      "required": [
+        "precondition",
+        "snapshot"
+      ],
+      "type": "object"
+    },
+    "subtree_result": {
+      "additionalProperties": false,
+      "properties": {
+        "root_sync_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "source": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "vault": {
+          "$ref": "#/$defs/vault"
+        }
+      },
+      "required": [
+        "vault",
+        "root_sync_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "subtree_write": {
+      "additionalProperties": false,
+      "properties": {
+        "precondition": {
+          "$ref": "#/$defs/existing_precondition"
+        },
+        "source": {
+          "$ref": "#/$defs/snapshot"
+        }
+      },
+      "required": [
+        "precondition",
+        "source"
+      ],
+      "type": "object"
+    },
+    "uid": {
+      "pattern": "^[0-9a-f]{16}$",
+      "type": "string"
+    },
+    "uuid": {
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "vault": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "name": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "remark": {
+          "maxLength": 2000,
+          "type": "string"
+        },
+        "revision": {
+          "$ref": "#/$defs/positive64"
+        },
+        "uid": {
+          "$ref": "#/$defs/uid"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uid",
+        "name",
+        "epoch",
+        "revision",
+        "created_at",
+        "updated_at",
+        "remark"
+      ],
+      "type": "object"
+    },
+    "vault_list": {
+      "additionalProperties": false,
+      "properties": {
+        "next_cursor": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "maxLength": 512,
+              "type": "string"
+            }
+          ]
+        },
+        "vaults": {
+          "items": {
+            "$ref": "#/$defs/vault"
+          },
+          "maxItems": 100,
+          "type": "array"
+        }
+      },
+      "required": [
+        "vaults",
+        "next_cursor"
+      ],
+      "type": "object"
+    },
+    "version": {
+      "additionalProperties": false,
+      "properties": {
+        "epoch": {
+          "$ref": "#/$defs/uuid"
+        },
+        "revision": {
+          "$ref": "#/$defs/positive64"
+        }
+      },
+      "required": [
+        "epoch",
+        "revision"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://anynote.local/schemas/sync-v1.json",
+  "$ref": "#/$defs/snapshot",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AnyNote manual sync v1 snapshot"
+}

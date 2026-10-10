@@ -200,7 +200,9 @@ int main() {
         int64_t oldNoteId = repo.CreateNote(0, L"旧版架构笔记", 4, 0,
             "{\\rtf1\\ansi\\deff0\\nouicompat{\\fonttbl{\\f0\\fnil\\fcharset134 Segoe UI;}}\\viewkind4\\uc1\\pard "
             "\\u21407?\\u29983? Win32 \\u19982? SQLite3MC \\u20840?\\u24211?\\u21152?\\u23494?\\par}");
-        // 初始 plainText 为空
+        // 新版创建时会派生索引；显式清空以模拟旧版遗留内容。
+        assert(db.Execute("UPDATE node_contents SET plain_text=NULL WHERE node_id=" + std::to_string(oldNoteId)));
+        // 模拟的旧版 plainText 为空
         assert(repo.GetNotePlainText(oldNoteId).empty());
 
         // 重新调用 InitializeSchema 触发自动回填

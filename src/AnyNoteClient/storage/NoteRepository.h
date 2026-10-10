@@ -15,7 +15,9 @@ public:
     ~NoteRepository() = default;
 
     // 初始化表结构与索引
-    bool InitializeSchema();
+    bool InitializeSchema(const std::string& password = "");
+    std::string GetVaultUid();
+    static std::wstring DerivePlainText(const std::string& rtf);
 
     // 统计节点总数
     int64_t GetNodeCount();

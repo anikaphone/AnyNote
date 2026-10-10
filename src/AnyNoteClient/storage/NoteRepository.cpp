@@ -1,4 +1,7 @@
 #include "NoteRepository.h"
+#include "SchemaMigrator.h"
+#include "common/Identity.h"
+#include "sync/SyncProtocol.h"
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
 #include <sqlite3.h>
@@ -366,8 +369,13 @@ NoteRepository::NoteRepository(Database& db)
     : m_db(db) {
 }
 
-bool NoteRepository::InitializeSchema() {
+std::wstring NoteRepository::DerivePlainText(const std::string& rtf) {
+    return ExtractPlainTextFromRtf(rtf);
+}
+
+bool NoteRepository::InitializeSchema(const std::string& password) {
     if (!m_db.IsOpen()) return false;
+    if (!SchemaMigrator::Migrate(m_db, password, ExtractPlainTextFromRtf)) return false;
 
     const char* schemaSql = R"(
         CREATE TABLE IF NOT EXISTS notebook_meta (
@@ -460,6 +468,12 @@ bool NoteRepository::InitializeSchema() {
     return true;
 }
 
+std::string NoteRepository::GetVaultUid() {
+    Database::Statement statement;
+    if (!statement.Prepare(m_db, "SELECT value FROM uid WHERE singleton=1") || statement.Step() != SQLITE_ROW) return {};
+    return statement.GetText(0);
+}
+
 int64_t NoteRepository::GetNodeCount() {
     Database::Statement stmt;
     if (!stmt.Prepare(m_db, "SELECT count(*) FROM nodes;")) {
@@ -538,6 +552,13 @@ std::wstring NoteRepository::GetNotePlainText(int64_t nodeId) {
 
 int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, int sequence, int nodeType, const std::string& initialRtf, const std::wstring& initialPlainText) {
     if (!m_db.IsOpen()) return 0;
+    std::string syncId, contentHash;
+    std::wstring plainText = initialPlainText;
+    try {
+        syncId = common::NewUuid();
+        contentHash = sync::Sha256(initialRtf);
+        if (plainText.empty() && !initialRtf.empty()) plainText = ExtractPlainTextFromRtf(initialRtf);
+    } catch (const std::exception&) { return 0; }
 
     if (sequence < 0) {
         Database::Statement seqStmt;
@@ -558,19 +579,14 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
     if (!m_db.BeginTransaction()) return 0;
 
     Database::Statement insStmt;
-    if (!insStmt.Prepare(m_db, "INSERT INTO nodes (parent_id, sequence, title, node_type, created_time, modified_time) VALUES (?, ?, ?, ?, ?, ?);")) {
+    if (!insStmt.Prepare(m_db, "INSERT INTO nodes (parent_id, sequence, title, node_type, created_time, modified_time, sync_id) VALUES (?, ?, ?, ?, ?, ?, ?);")) {
         m_db.Rollback();
         return 0;
     }
 
-    insStmt.BindInt64(1, parentId);
-    insStmt.BindInt(2, sequence);
-    insStmt.BindText(3, title);
-    insStmt.BindInt(4, nodeType);
-    insStmt.BindInt64(5, now);
-    insStmt.BindInt64(6, now);
-
-    if (insStmt.Step() != SQLITE_DONE) {
+    if (!insStmt.BindInt64(1, parentId) || !insStmt.BindInt(2, sequence) ||
+        !insStmt.BindText(3, title) || !insStmt.BindInt(4, nodeType) || !insStmt.BindInt64(5, now) ||
+        !insStmt.BindInt64(6, now) || !insStmt.BindText(7, syncId) || insStmt.Step() != SQLITE_DONE) {
         m_db.Rollback();
         return 0;
     }
@@ -578,24 +594,13 @@ int64_t NoteRepository::CreateNote(int64_t parentId, const std::wstring& title, 
     int64_t newId = sqlite3_last_insert_rowid(m_db.GetRawHandle());
 
     Database::Statement cntStmt;
-    if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text) VALUES (?, 1, ?, ?);")) {
+    if (!cntStmt.Prepare(m_db, "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text, content_hash) VALUES (?, 1, ?, ?, ?);")) {
         m_db.Rollback();
         return 0;
     }
 
-    cntStmt.BindInt64(1, newId);
-    if (!initialRtf.empty()) {
-        cntStmt.BindBlob(2, initialRtf.data(), initialRtf.size());
-    } else {
-        cntStmt.BindNull(2);
-    }
-    if (!initialPlainText.empty()) {
-        cntStmt.BindText(3, initialPlainText);
-    } else {
-        cntStmt.BindNull(3);
-    }
-
-    if (cntStmt.Step() != SQLITE_DONE) {
+    if (!cntStmt.BindInt64(1, newId) || !cntStmt.BindBlob(2, initialRtf.data(), initialRtf.size()) ||
+        !cntStmt.BindText(3, plainText) || !cntStmt.BindText(4, contentHash) || cntStmt.Step() != SQLITE_DONE) {
         m_db.Rollback();
         return 0;
     }
@@ -623,34 +628,29 @@ bool NoteRepository::UpdateNoteTitle(int64_t nodeId, const std::wstring& title) 
 
 bool NoteRepository::UpdateNoteContent(int64_t nodeId, const std::string& rtfContent, const std::wstring& plainText) {
     if (!m_db.IsOpen()) return false;
+    std::string contentHash;
+    std::wstring indexText = plainText;
+    try {
+        contentHash = sync::Sha256(rtfContent);
+        if (indexText.empty() && !rtfContent.empty()) indexText = ExtractPlainTextFromRtf(rtfContent);
+    } catch (const std::exception&) { return false; }
 
     int64_t now = GetCurrentUnixTimestamp();
     if (!m_db.BeginTransaction()) return false;
 
     Database::Statement cntStmt;
     if (!cntStmt.Prepare(m_db,
-        "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text) "
-        "VALUES (?, 1, ?, ?) "
+        "INSERT INTO node_contents (node_id, format_type, content_rtf, plain_text, content_hash) "
+        "VALUES (?, 1, ?, ?, ?) "
         "ON CONFLICT(node_id) DO UPDATE SET "
         "content_rtf = excluded.content_rtf, "
-        "plain_text = excluded.plain_text;")) {
+        "plain_text = excluded.plain_text, content_hash = excluded.content_hash, format_type = excluded.format_type;")) {
         m_db.Rollback();
         return false;
     }
 
-    cntStmt.BindInt64(1, nodeId);
-    if (!rtfContent.empty()) {
-        cntStmt.BindBlob(2, rtfContent.data(), rtfContent.size());
-    } else {
-        cntStmt.BindNull(2);
-    }
-    if (!plainText.empty()) {
-        cntStmt.BindText(3, plainText);
-    } else {
-        cntStmt.BindNull(3);
-    }
-
-    if (cntStmt.Step() != SQLITE_DONE) {
+    if (!cntStmt.BindInt64(1, nodeId) || !cntStmt.BindBlob(2, rtfContent.data(), rtfContent.size()) ||
+        !cntStmt.BindText(3, indexText) || !cntStmt.BindText(4, contentHash) || cntStmt.Step() != SQLITE_DONE) {
         m_db.Rollback();
         return false;
     }

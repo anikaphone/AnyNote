@@ -1,0 +1,860 @@
+{
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Manual snapshot sync API implemented by the Go service and native Windows client. See the implementation report for validation scope.",
+    "title": "AnyNote manual sync",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/login_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        },
+        "security": []
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/auth/password": {
+      "post": {
+        "operationId": "changePassword",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/password_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        },
+        "security": []
+      }
+    },
+    "/capabilities": {
+      "get": {
+        "operationId": "capabilities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/capabilities"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/operations/{operation_id}": {
+      "get": {
+        "operationId": "getOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults": {
+      "get": {
+        "operationId": "listVaults",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "maxLength": 512,
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/vault_list"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults/{uid}": {
+      "delete": {
+        "operationId": "deleteVault",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/delete_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults/{uid}/manifest": {
+      "get": {
+        "operationId": "getManifest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/manifest"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults/{uid}/nodes/{sync_id}/subtree": {
+      "delete": {
+        "operationId": "deleteSubtree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sync_id",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/delete_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      },
+      "get": {
+        "operationId": "getSubtree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sync_id",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/positive64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/subtree_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      },
+      "put": {
+        "operationId": "putSubtree",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "sync_id",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/subtree_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults/{uid}/remark": {
+      "patch": {
+        "operationId": "updateRemark",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/remark_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    },
+    "/vaults/{uid}/snapshot": {
+      "get": {
+        "operationId": "getSnapshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "epoch",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uuid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/positive64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/snapshot_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      },
+      "put": {
+        "operationId": "putSnapshot",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "uid",
+            "required": true,
+            "schema": {
+              "$ref": "./sync-v1.schema.json#/$defs/uid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "./sync-v1.schema.json#/$defs/snapshot_write"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "data": {
+                      "$ref": "./sync-v1.schema.json#/$defs/operation_result"
+                    },
+                    "request_id": {
+                      "$ref": "./sync-v1.schema.json#/$defs/uuid"
+                    }
+                  },
+                  "required": [
+                    "request_id",
+                    "data"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success; a mutation is committed only after the database transaction completes."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "./sync-v1.schema.json#/$defs/error"
+                }
+              }
+            },
+            "description": "Typed failure; no SQL, paths, credentials or note content in error messages."
+          }
+        }
+      }
+    }
+  },
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://localhost:8443/api/v1"
+    }
+  ]
+}

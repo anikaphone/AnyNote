@@ -49,6 +49,24 @@ CMakeUserPresets.json
 # vcpkg 本地依赖安装目录
 vcpkg_installed/
 
+# Sync runtime data and secrets (test fixtures use JSON, never real vaults).
+*.anynote
+*.anynote-wal
+*.anynote-shm
+*.anynote.lock
+*.key
+*.pem
+certs/
+anynote.json
+anynote.ini
+credentials.dat
+.sync-backups/
+.sync-pending/
+.sync-operations/
+*.json.lock
+sync-state.json
+sync-state.json.bak
+
 # JetBrains / CLion
 .idea/
 cmake-build-*/

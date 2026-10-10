@@ -16,6 +16,7 @@
 #include <string>
 
 namespace anynote::ui {
+class CloudSync;
 
 class MainWindow : public common::Window {
 public:
@@ -80,6 +81,9 @@ private:
     void OnNewVault();
     void OnOpenExternalVault();
     void OnManageVaults();
+    void OnCloudCommand(int command);
+    std::unique_ptr<CloudSync> m_cloudSync;
+    bool m_syncBusy = false;
 
     HWND m_hVaultBar = nullptr;
     storage::VaultManager m_vaultManager;
@@ -102,6 +106,7 @@ private:
     std::unique_ptr<storage::Database> m_db;
     std::unique_ptr<storage::NoteRepository> m_repo;
     int64_t m_activeNoteId = 0;
+    std::string m_loadedEditorHash;
     std::wstring m_currentNotebookPath;
     bool m_revertingTreeSelection = false;
 

@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "CloudSync.h"
 #include "resource.h"
 #include "common/StringUtils.h"
 #include "common/SyntaxHighlighter.h"
@@ -526,13 +527,16 @@ INT_PTR CALLBACK ManageVaultsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
                 std::filesystem::create_directories(pCtx->mgr->GetNotebooksDir(), ec);
                 if (!std::filesystem::exists(nvCtx.path)) {
                     storage::Database newDb;
-                    if (newDb.Open(nvCtx.path, "")) {
-                        storage::NoteRepository newRepo(newDb);
-                        newRepo.InitializeSchema();
-                        newDb.Close();
+                    storage::NoteRepository newRepo(newDb);
+                    if (!newDb.Open(nvCtx.path, "") || !newRepo.InitializeSchema() || !newDb.CheckpointAndClose()) {
+                        MessageBoxW(hDlg, L"无法创建笔记本库，未添加到列表。", L"创建失败", MB_OK | MB_ICONERROR);
+                        return TRUE;
                     }
                 }
-                pCtx->mgr->AddVault(nvCtx.name, nvCtx.path);
+                if (!pCtx->mgr->AddVault(nvCtx.name, nvCtx.path)) {
+                    MessageBoxW(hDlg, L"库文件已保留，但配置保存失败。请重新打开该文件以登记。", L"登记失败", MB_OK | MB_ICONERROR);
+                    return TRUE;
+                }
                 pCtx->listModified = true;
                 RefreshVaultList(hDlg, pCtx);
             }
@@ -550,7 +554,10 @@ INT_PTR CALLBACK ManageVaultsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
             RenameVaultContext rvCtx;
             rvCtx.initialName = v->name;
             if (DialogBoxParamW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDD_RENAME_VAULT), hDlg, RenameVaultDialogProc, reinterpret_cast<LPARAM>(&rvCtx)) == IDOK && rvCtx.ok) {
-                pCtx->mgr->RenameVault(static_cast<size_t>(sel), rvCtx.resultName);
+                if (!pCtx->mgr->RenameVault(static_cast<size_t>(sel), rvCtx.resultName)) {
+                    MessageBoxW(hDlg, L"配置保存失败，名称未修改。", L"保存失败", MB_OK | MB_ICONERROR);
+                    return TRUE;
+                }
                 pCtx->listModified = true;
                 RefreshVaultList(hDlg, pCtx);
             }
@@ -584,7 +591,10 @@ INT_PTR CALLBACK ManageVaultsDialogProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPA
                         return TRUE;
                     }
                 }
-                pCtx->mgr->RemoveVault(static_cast<size_t>(sel));
+                if (!pCtx->mgr->RemoveVault(static_cast<size_t>(sel))) {
+                    MessageBoxW(hDlg, L"配置保存失败，库仍保留在列表中。", L"保存失败", MB_OK | MB_ICONERROR);
+                    return TRUE;
+                }
                 pCtx->listModified = true;
                 RefreshVaultList(hDlg, pCtx);
             }
@@ -994,7 +1004,12 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     });
 
     // 8. 加载多库配置并打开活动库 (若失效则优雅回退；仅当首次无任何库时填充欢迎笔记)
-    m_vaultManager.Load();
+    if (!m_vaultManager.Load()) {
+        MessageBoxW(m_hWnd, L"无法读取笔记库配置。请检查 anynote.json，必要时从 anynote.json.bak 恢复；原配置未被覆盖。", L"配置读取失败", MB_OK | MB_ICONERROR);
+        return false;
+    }
+    if (!m_vaultManager.GetLastError().empty())
+        MessageBoxW(m_hWnd, L"INI 配置已读取，但 JSON 迁移未能保存。请检查目录权限；原 INI 已保留。", L"配置迁移未完成", MB_OK | MB_ICONWARNING);
     m_isOutlineVisible = (m_vaultManager.GetConfigString(L"View", L"OutlineVisible", L"0") == L"1");
     std::wstring outlineWStr = m_vaultManager.GetConfigString(L"View", L"OutlineWidth", L"220");
     if (!outlineWStr.empty()) {
@@ -1041,6 +1056,8 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     LayoutChildren(clientW, clientH);
     Show(nCmdShow);
     Update();
+
+    PostMessageW(m_hWnd, WM_APP + 171, 0, 0);
 
     return true;
 }
@@ -1222,9 +1239,14 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     }
 
     auto newRepo = std::make_unique<storage::NoteRepository>(*newDb);
-    if (!newRepo->InitializeSchema()) {
+    const bool schemaReady = newRepo->InitializeSchema(currentPwd);
+    if (!currentPwd.empty()) SecureZeroMemory(currentPwd.data(), currentPwd.size());
+    if (!schemaReady) {
         MessageBoxW(m_hWnd, L"初始化笔记本表结构失败！", L"数据库错误", MB_OK | MB_ICONERROR);
         return false;
+    }
+    if (!m_vaultManager.RegisterVaultIdentity(filePath, newRepo->GetVaultUid())) {
+        MessageBoxW(m_hWnd, L"笔记库已打开，但库身份配置保存失败。请检查配置文件权限或其他实例的修改后重新打开。", L"配置保存失败", MB_OK | MB_ICONWARNING);
     }
 
     if (createWelcomeIfEmpty && newRepo->GetNodeCount() == 0) {
@@ -1351,6 +1373,7 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
 }
 
 bool MainWindow::SaveActiveNote() {
+    if (m_syncBusy) return false;
     if (m_activeNoteId <= 0) return true;
     if (!m_repo || !m_richEditView.GetHwnd()) return false;
 
@@ -1363,6 +1386,17 @@ bool MainWindow::SaveActiveNote() {
         return false;
     }
 
+    // RichEdit can normalize imported RTF. Compare with the editor's loaded
+    // representation, not the raw stored bytes, so merely opening sync preserves
+    // the original hash/time. WM_SETTEXT resets EM_GETMODIFY, so it is not enough.
+    const auto editorHash = sync::Sha256(*rtfOpt);
+    if (!m_loadedEditorHash.empty() && editorHash == m_loadedEditorHash) return true;
+    // Focus/layout/undo changes can alter RichEdit's serialized representation
+    // relative to the initial load without changing the already stored bytes.
+    if (*rtfOpt == m_repo->GetNoteContent(m_activeNoteId)) {
+        m_loadedEditorHash = editorHash;
+        return true;
+    }
     std::wstring plainText = m_richEditView.GetPlainText();
     if (!m_repo->UpdateNoteContent(m_activeNoteId, *rtfOpt, plainText)) {
         if (m_hStatusBar) {
@@ -1371,6 +1405,8 @@ bool MainWindow::SaveActiveNote() {
         MessageBoxW(m_hWnd, L"当前笔记保存失败，原笔记本仍保持打开状态。", L"保存失败", MB_OK | MB_ICONERROR);
         return false;
     }
+    SendMessageW(m_richEditView.GetHwnd(), EM_SETMODIFY, FALSE, 0);
+    m_loadedEditorHash = editorHash;
 
     if (m_hStatusBar) {
         SendMessageW(m_hStatusBar, SB_SETTEXTW, 1 | SBT_NOBORDERS, reinterpret_cast<LPARAM>(L"状态: 已保存"));
@@ -1391,6 +1427,9 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
     }
     KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
     UpdateOutline();
+    SendMessageW(m_richEditView.GetHwnd(), EM_SETMODIFY, FALSE, 0);
+    const auto normalized = m_richEditView.StreamOutRTF();
+    m_loadedEditorHash = normalized ? sync::Sha256(*normalized) : "";
 }
 
 void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
@@ -1444,7 +1483,15 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
 }
 
 LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (m_syncBusy && (uMsg == WM_COMMAND || uMsg == WM_NOTIFY || uMsg == WM_CONTEXTMENU || uMsg == WM_CLOSE || uMsg == WM_TIMER)) return 0;
     switch (uMsg) {
+    case WM_APP + 171:
+        if (m_vaultManager.GetConfigString(L"Sync", L"AutoLogin", L"0") == L"1") OnCloudCommand(0);
+        return 0;
+    case WM_INITMENUPOPUP:
+        for (int id : {ID_CLOUD_UPLOAD, ID_CLOUD_DOWNLOAD, ID_CLOUD_MANAGE})
+            EnableMenuItem(GetMenu(m_hWnd), id, MF_BYCOMMAND | (m_cloudSync && m_cloudSync->IsLoggedIn() ? MF_ENABLED : MF_GRAYED));
+        break;
     case WM_EDITOR_FORMAT_CHANGED:
         m_toolbar.SetSelectedHeadingIndex(m_richEditView.GetCurrentHeadingLevel());
         if (m_isOutlineVisible && m_outlinePane.GetHwnd()) {
@@ -1812,6 +1859,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
 
         WORD cmdId = LOWORD(wParam);
+        if (cmdId >= ID_CLOUD_ACCOUNT && cmdId <= ID_CLOUD_MANAGE) { OnCloudCommand(cmdId); return 0; }
         if (cmdId == ID_VIEW_OUTLINE) {
             ToggleOutlinePane();
             return 0;
@@ -2597,7 +2645,10 @@ void MainWindow::OnNewVault() {
     if (res == IDOK && ctx.ok) {
         std::error_code ec;
         std::filesystem::create_directories(m_vaultManager.GetNotebooksDir(), ec);
-        m_vaultManager.AddVault(ctx.name, ctx.path);
+        if (!m_vaultManager.AddVault(ctx.name, ctx.path)) {
+            MessageBoxW(m_hWnd, L"无法保存新笔记库配置，请检查权限或配置是否已被其他实例修改。", L"配置保存失败", MB_OK | MB_ICONERROR);
+            return;
+        }
         SwitchToVault(ctx.path, true);
     }
 }
@@ -2614,7 +2665,10 @@ void MainWindow::OnOpenExternalVault() {
     if (GetOpenFileNameW(&ofn)) {
         std::wstring path = szFile;
         std::wstring name = std::filesystem::path(path).stem().wstring();
-        m_vaultManager.AddVault(name, path);
+        if (!m_vaultManager.AddVault(name, path)) {
+            MessageBoxW(m_hWnd, L"无法登记笔记库，原配置未被覆盖。", L"配置保存失败", MB_OK | MB_ICONERROR);
+            return;
+        }
         SwitchToVault(path);
     }
 }
@@ -2639,8 +2693,9 @@ void MainWindow::OnManageVaults() {
 }
 
 bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
+    if (m_syncBusy) return false;
     if (_wcsicmp(path.c_str(), m_currentNotebookPath.c_str()) == 0) {
-        m_vaultManager.SetActiveVaultPath(path);
+        if (!m_vaultManager.SetActiveVaultPath(path)) return false;
         UpdateVaultBarUI();
         return true;
     }
@@ -2658,13 +2713,39 @@ bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
     }
 
     std::wstring previousActivePath = m_vaultManager.GetActiveVaultPath();
-    m_vaultManager.SetActiveVaultPath(path);
+    if (!m_vaultManager.SetActiveVaultPath(path)) {
+        MessageBoxW(m_hWnd, L"无法保存当前笔记库选择，切换已取消。请检查配置是否被其他实例修改。", L"配置保存失败", MB_OK | MB_ICONWARNING);
+        return false;
+    }
     if (OpenNotebook(path, "")) {
         UpdateVaultBarUI();
         return true;
     }
     m_vaultManager.SetActiveVaultPath(previousActivePath);
     return false;
+}
+
+void MainWindow::OnCloudCommand(int command) {
+    if (m_syncBusy || !m_db || !m_db->IsOpen() || !SaveActiveNote()) return;
+    CancelDragOperation();
+    if (!m_cloudSync) m_cloudSync = std::make_unique<CloudSync>(m_hWnd, m_vaultManager,
+        [this]() -> storage::Database& { return *m_db; }, [this] {
+            const auto selected = m_activeNoteId;
+            // Never autosave the pre-import editor buffer over committed data.
+            m_activeNoteId = 0;
+            m_syncBusy = false;
+            PopulateTreeViewFromDb(selected);
+            if (m_isNodeSearchVisible) FilterTreeNodes(m_nodeSearchBar.GetKeyword());
+            if (m_searchPane.GetHwnd()) m_searchPane.PerformSearch();
+            SendMessageW(m_richEditView.GetHwnd(), EM_EMPTYUNDOBUFFER, 0, 0);
+            UpdateVaultBarUI();
+            m_syncBusy = true;
+        });
+    m_syncBusy = true;
+    try { if (command == 0) m_cloudSync->AutoLogin(); else m_cloudSync->Command(command); }
+    catch (const std::exception& error) { SyncError(m_hWnd, error); }
+    m_syncBusy = false;
+    UpdateVaultBarUI();
 }
 
 void MainWindow::ShowNodeSearch(bool show) {

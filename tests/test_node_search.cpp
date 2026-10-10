@@ -105,6 +105,19 @@ void RunTests() {
     HWND count = GetDlgItem(bar, IDC_NODE_SEARCH_COUNT);
     Check(tree && editor && filterEdit && count, "Cannot find node search controls");
 
+    // Loading and explicitly saving an untouched note must preserve the source
+    // RTF bytes and modified time rather than persisting RichEdit normalization.
+    {
+        anynote::storage::Database verify;
+        Check(verify.Open(firstPath.wstring()), "Cannot inspect unmodified note");
+        anynote::storage::NoteRepository repository(verify);
+        const auto original = repository.GetNoteContent(1);
+        const auto time = repository.GetNode(1)->modifiedTime;
+        SendMessageW(window.GetHwnd(), WM_COMMAND, ID_FILE_SAVE, 0);
+        Check(repository.GetNoteContent(1) == original && repository.GetNode(1)->modifiedTime == time,
+            "Saving an untouched editor rewrote source RTF or timestamp");
+    }
+
     SetWindowTextW(filterEdit, L"Alpha");
     Check(TreeView_GetCount(tree) == 1 && Text(count) == L"1 项", "Initial filter is wrong");
     Check(window.SwitchToVault(secondPath.wstring()), "Cannot switch to second vault");

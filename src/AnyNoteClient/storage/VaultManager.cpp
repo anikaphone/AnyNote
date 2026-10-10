@@ -1,322 +1,234 @@
 #include "VaultManager.h"
+#include "ConfigStore.h"
+#include "common/StringUtils.h"
 #include <windows.h>
-#include <shlwapi.h>
 #include <filesystem>
 #include <algorithm>
+#include <map>
+#include <stdexcept>
 
 namespace anynote::storage {
-
 namespace {
-
-bool PathsEqual(const std::wstring& p1, const std::wstring& p2) {
-    std::error_code ec;
-    std::filesystem::path path1 = std::filesystem::path(p1).lexically_normal();
-    std::filesystem::path path2 = std::filesystem::path(p2).lexically_normal();
-    return _wcsicmp(path1.wstring().c_str(), path2.wstring().c_str()) == 0;
+using Json = nlohmann::json;
+bool PathsEqual(const std::wstring& a, const std::wstring& b) {
+    return _wcsicmp(std::filesystem::path(a).lexically_normal().c_str(),
+        std::filesystem::path(b).lexically_normal().c_str()) == 0;
 }
-
-} // namespace
+void Check(bool valid, const char* error) { if (!valid) throw std::runtime_error(error); }
+bool ValidUid(const std::string& uid) { return uid.size() == 16 && uid.find_first_not_of("0123456789abcdef") == std::string::npos; }
+std::string ExistingKey(const Json& object, const std::wstring& key) {
+    if (object.is_object()) for (auto it = object.begin(); it != object.end(); ++it)
+        if (_wcsicmp(anynote::utils::Utf8ToWide(it.key()).c_str(), key.c_str()) == 0) return it.key();
+    return anynote::utils::WideToUtf8(key);
+}
+std::wstring Setting(const Json& settings, const std::wstring& section, const std::wstring& key, const std::wstring& fallback) {
+    auto found = settings.find(ExistingKey(settings, section));
+    if (found == settings.end() || !found->is_object()) return fallback;
+    auto value = found->find(ExistingKey(*found, key));
+    return value != found->end() && value->is_string() ? anynote::utils::Utf8ToWide(value->get<std::string>()) : fallback;
+}
+}
 
 VaultManager::VaultManager() {
-    wchar_t exePathBuf[MAX_PATH] = {0};
-    GetModuleFileNameW(nullptr, exePathBuf, MAX_PATH);
-    PathRemoveFileSpecW(exePathBuf);
-
-    m_exeDir = exePathBuf;
-    m_iniPath = m_exeDir + L"\\anynote.ini";
-    m_notebooksDir = m_exeDir + L"\\notebooks";
+    std::wstring executable(32768, L'\0');
+    DWORD length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    executable.resize(length);
+    m_exeDir = std::filesystem::path(executable).parent_path().wstring();
+    m_iniPath = (std::filesystem::path(m_exeDir) / L"anynote.ini").wstring();
+    m_jsonPath = (std::filesystem::path(m_exeDir) / L"anynote.json").wstring();
+    m_notebooksDir = (std::filesystem::path(m_exeDir) / L"notebooks").wstring();
 }
-
 VaultManager::VaultManager(const std::wstring& iniPath) : VaultManager() {
-    if (!iniPath.empty()) {
-        std::filesystem::path configPath(iniPath);
-        if (configPath.has_parent_path()) {
-            m_exeDir = configPath.parent_path().wstring();
-        }
-        m_iniPath = configPath.wstring();
-        m_notebooksDir = (configPath.parent_path() / L"notebooks").wstring();
-    }
+    if (iniPath.empty()) return;
+    auto path = std::filesystem::absolute(iniPath).lexically_normal();
+    m_exeDir = path.parent_path().wstring();
+    m_iniPath = path.replace_extension(L".ini").wstring();
+    m_jsonPath = path.replace_extension(L".json").wstring();
+    m_notebooksDir = (path.parent_path() / L"notebooks").wstring();
 }
-
-void VaultManager::EnsureIniFileExists() {
-    if (!std::filesystem::exists(m_iniPath)) {
-        HANDLE hFile = CreateFileW(
-            m_iniPath.c_str(),
-            GENERIC_WRITE,
-            0,
-            nullptr,
-            CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
-            nullptr
-        );
-        if (hFile != INVALID_HANDLE_VALUE) {
-            // 写入 UTF-16LE BOM 标识 (0xFF, 0xFE)，以便 Windows INI API 支持全 Unicode 编码
-            unsigned char bom[2] = { 0xFF, 0xFE };
-            DWORD written = 0;
-            WriteFile(hFile, bom, sizeof(bom), &written, nullptr);
-            CloseHandle(hFile);
-        }
-    }
+std::wstring VaultManager::ResolvePath(const std::string& text) const {
+    Check(text.find('\0') == std::string::npos, "CONFIG_INVALID_PATH");
+    if (text.empty()) return {};
+    auto path = std::filesystem::path(anynote::utils::Utf8ToWide(text));
+    if (path.is_relative()) path = std::filesystem::path(m_exeDir) / path;
+    return path.lexically_normal().wstring();
 }
-
-std::wstring VaultManager::SanitizeFileName(const std::wstring& name) {
-    std::wstring result = name;
-    const wchar_t invalidChars[] = L"\\/:*?\"<>|";
-    for (wchar_t& ch : result) {
-        if (wcschr(invalidChars, ch) != nullptr || ch < 32) {
-            ch = L'_';
-        }
-    }
-    while (!result.empty() && (result.back() == L' ' || result.back() == L'.')) {
-        result.pop_back();
-    }
-    if (result.empty()) {
-        result = L"Notebook";
-    }
-    return result;
+std::string VaultManager::StoredPath(const std::wstring& text) const {
+    if (text.empty()) return {};
+    const auto path = std::filesystem::path(text).lexically_normal();
+    const auto relative = path.lexically_relative(m_exeDir);
+    if (!relative.empty() && *relative.begin() != L"..") return anynote::utils::WideToUtf8(relative.generic_wstring());
+    return anynote::utils::WideToUtf8(path.wstring());
 }
-
-std::wstring VaultManager::GenerateNewVaultPath(const std::wstring& vaultName) const {
-    std::wstring safeName = SanitizeFileName(vaultName);
-    return m_notebooksDir + L"\\" + safeName + L".anynote";
-}
-
-bool VaultManager::Load() {
-    m_vaults.clear();
-    m_activeVaultPath.clear();
-    m_isFirstTimeCreation = false;
-
-    if (!std::filesystem::exists(m_iniPath)) {
-        // 初次运行无 anynote.ini
-        std::wstring legacyPath = m_exeDir + L"\\notebook.anynote";
-        if (std::filesystem::exists(legacyPath)) {
-            // 平滑兼容老版本 notebook.anynote
-            m_vaults.push_back({ L"默认笔记本", legacyPath });
-            m_activeVaultPath = legacyPath;
-            m_isFirstTimeCreation = false;
-        } else {
-            // 全新环境：默认在 notebooks/ 创建“我的笔记”
-            std::error_code ec;
-            std::filesystem::create_directories(m_notebooksDir, ec);
-            std::wstring defaultPath = m_notebooksDir + L"\\我的笔记.anynote";
-            m_vaults.push_back({ L"我的笔记", defaultPath });
-            m_activeVaultPath = defaultPath;
-            m_isFirstTimeCreation = true;
-        }
-        Save();
-        return true;
-    }
-
-    // 从 anynote.ini 读取配置
-    wchar_t buf[MAX_PATH * 2] = {0};
-    GetPrivateProfileStringW(
-        L"General",
-        L"ActiveVaultPath",
-        L"",
-        buf,
-        static_cast<DWORD>(std::size(buf)),
-        m_iniPath.c_str()
-    );
-    m_activeVaultPath = buf;
-
-    int count = GetPrivateProfileIntW(L"Vaults", L"Count", 0, m_iniPath.c_str());
-    for (int i = 0; i < count; ++i) {
-        std::wstring keyName = L"Vault_" + std::to_wstring(i) + L"_Name";
-        std::wstring keyPath = L"Vault_" + std::to_wstring(i) + L"_Path";
-
-        wchar_t nameBuf[256] = {0};
-        wchar_t pathBuf[MAX_PATH * 2] = {0};
-
-        GetPrivateProfileStringW(L"Vaults", keyName.c_str(), L"", nameBuf, static_cast<DWORD>(std::size(nameBuf)), m_iniPath.c_str());
-        GetPrivateProfileStringW(L"Vaults", keyPath.c_str(), L"", pathBuf, static_cast<DWORD>(std::size(pathBuf)), m_iniPath.c_str());
-
-        if (pathBuf[0] != L'\0') {
-            std::wstring name = nameBuf;
-            if (name.empty()) {
-                name = std::filesystem::path(pathBuf).stem().wstring();
+bool VaultManager::EnsureDocument() {
+    if (m_loadFailed) return false;
+    if (m_loaded) return true;
+    try {
+        const auto config = ConfigStore::Read(m_jsonPath);
+        auto document = config.value;
+        std::vector<VaultItem> vaults;
+        std::wstring active;
+        if (config.exists) {
+            Check(document.contains("schema_version") && document["schema_version"].is_number_integer() && document["schema_version"] == 1,
+                "CONFIG_UNSUPPORTED_VERSION");
+            Check(document.at("vaults").is_array() && document.at("settings").is_object() &&
+                document.at("active_vault_path").is_string(), "CONFIG_INVALID_STRUCTURE");
+            active = ResolvePath(document.at("active_vault_path").get<std::string>());
+            for (const auto& item : document.at("vaults")) {
+                VaultItem vault;
+                vault.name = anynote::utils::Utf8ToWide(item.at("name").get<std::string>());
+                vault.path = ResolvePath(item.at("path").get<std::string>());
+                Check(!vault.path.empty(), "CONFIG_INVALID_PATH");
+                if (!item.at("uid").is_null()) { vault.uid = item.at("uid").get<std::string>(); Check(ValidUid(vault.uid), "CONFIG_INVALID_UID"); }
+                Check(std::none_of(vaults.begin(), vaults.end(), [&](const auto& old) { return PathsEqual(old.path, vault.path); }), "CONFIG_DUPLICATE_PATH");
+                vaults.push_back(std::move(vault));
             }
-            m_vaults.push_back({ std::move(name), pathBuf });
-        }
-    }
-
-    if (m_vaults.empty()) {
-        std::wstring legacyPath = m_exeDir + L"\\notebook.anynote";
-        if (std::filesystem::exists(legacyPath)) {
-            m_vaults.push_back({ L"默认笔记本", legacyPath });
-            m_activeVaultPath = legacyPath;
         } else {
-            std::wstring defaultPath = m_notebooksDir + L"\\我的笔记.anynote";
-            m_vaults.push_back({ L"我的笔记", defaultPath });
-            m_activeVaultPath = defaultPath;
+            auto settings = ConfigStore::ReadIni(m_iniPath);
+            document = {{"schema_version", 1}, {"settings", settings}, {"vaults", Json::array()}, {"vault_files", Json::object()},
+                {"cloud", {{"server_url", ""}, {"certificate_path", "certs/server.crt"}, {"account", ""}, {"remember_password", false}, {"auto_login", false}}}};
+            active = ResolvePath(anynote::utils::WideToUtf8(Setting(settings, L"General", L"ActiveVaultPath", L"")));
+            const auto countText = Setting(settings, L"Vaults", L"Count", L"0");
+            size_t parsed = 0;
+            int count = std::stoi(countText, &parsed);
+            Check(parsed == countText.size() && count >= 0 && count <= 10000, "CONFIG_INVALID_VAULT_COUNT");
+            for (int i = 0; i < count; ++i) {
+                auto prefix = L"Vault_" + std::to_wstring(i);
+                auto path = ResolvePath(anynote::utils::WideToUtf8(Setting(settings, L"Vaults", prefix + L"_Path", L"")));
+                if (path.empty()) continue;
+                auto name = Setting(settings, L"Vaults", prefix + L"_Name", std::filesystem::path(path).stem().wstring());
+                Check(std::none_of(vaults.begin(), vaults.end(), [&](const auto& old) { return PathsEqual(old.path, path); }), "CONFIG_DUPLICATE_PATH");
+                vaults.push_back({name, path, {}});
+            }
         }
-        Save();
-    } else if (m_activeVaultPath.empty() || FindVaultByPath(m_activeVaultPath) < 0) {
-        m_activeVaultPath = m_vaults.front().path;
-        Save();
+        m_document = std::move(document); m_vaults = std::move(vaults); m_activeVaultPath = std::move(active);
+        m_fingerprint = config.fingerprint; m_loaded = true; m_lastError.clear();
+        return true;
+    } catch (const std::exception& error) {
+        m_loadFailed = true; m_lastError = error.what(); return false;
     }
-
-    return true;
 }
-
+bool VaultManager::Load() {
+    m_loaded = false; m_loadFailed = false; m_isFirstTimeCreation = false;
+    if (!EnsureDocument()) return false;
+    if (m_vaults.empty()) {
+        const auto legacy = (std::filesystem::path(m_exeDir) / L"notebook.anynote").wstring();
+        if (std::filesystem::exists(legacy)) m_vaults.push_back({L"默认笔记本", legacy, {}});
+        else {
+            std::error_code error;
+            std::filesystem::create_directories(m_notebooksDir, error);
+            if (error) { m_lastError = "CONFIG_NOTEBOOK_DIRECTORY_FAILED"; return false; }
+            m_vaults.push_back({L"我的笔记", GenerateNewVaultPath(L"我的笔记"), {}});
+            m_isFirstTimeCreation = m_fingerprint.empty() && !std::filesystem::exists(m_iniPath);
+        }
+    }
+    if (m_activeVaultPath.empty() || FindVaultByPath(m_activeVaultPath) < 0) m_activeVaultPath = m_vaults.front().path;
+    const bool saved = Save();
+    // A failed INI migration leaves the INI intact and usable. No stale INI
+    // fallback is permitted when a JSON already exists or is damaged.
+    return saved || (m_fingerprint.empty() && std::filesystem::exists(m_iniPath));
+}
 bool VaultManager::Save() {
-    EnsureIniFileExists();
-
-    bool ok = true;
-    if (!WritePrivateProfileStringW(
-        L"General",
-        L"ActiveVaultPath",
-        m_activeVaultPath.c_str(),
-        m_iniPath.c_str())) {
-        ok = false;
-    }
-
-    // 配置文件可由用户编辑，负数不能转换为 size_t 后作为循环上界。
-    int oldCount = GetPrivateProfileIntW(L"Vaults", L"Count", 0, m_iniPath.c_str());
-    if (oldCount < 0) {
-        oldCount = 0;
-    }
-
-    std::wstring countStr = std::to_wstring(m_vaults.size());
-    if (!WritePrivateProfileStringW(L"Vaults", L"Count", countStr.c_str(), m_iniPath.c_str())) {
-        ok = false;
-    }
-
-    for (size_t i = 0; i < m_vaults.size(); ++i) {
-        std::wstring keyName = L"Vault_" + std::to_wstring(i) + L"_Name";
-        std::wstring keyPath = L"Vault_" + std::to_wstring(i) + L"_Path";
-
-        if (!WritePrivateProfileStringW(L"Vaults", keyName.c_str(), m_vaults[i].name.c_str(), m_iniPath.c_str())) {
-            ok = false;
+    if (!EnsureDocument()) return false;
+    try {
+        auto document = m_document;
+        Json vaults = Json::array(), files = Json::object();
+        std::map<std::string, size_t> counts;
+        for (const auto& item : m_vaults) if (!item.uid.empty()) ++counts[item.uid];
+        for (const auto& item : m_vaults) {
+            Json record = Json::object();
+            if (m_document.contains("vaults")) for (const auto& old : m_document["vaults"])
+                if (PathsEqual(ResolvePath(old.at("path").get<std::string>()), item.path)) { record = old; break; }
+            record["name"] = anynote::utils::WideToUtf8(item.name); record["path"] = StoredPath(item.path);
+            record["uid"] = item.uid.empty() ? Json(nullptr) : Json(item.uid); vaults.push_back(std::move(record));
+            if (!item.uid.empty() && counts[item.uid] == 1) files[item.uid] = anynote::utils::WideToUtf8(std::filesystem::path(item.path).filename().wstring());
         }
-        if (!WritePrivateProfileStringW(L"Vaults", keyPath.c_str(), m_vaults[i].path.c_str(), m_iniPath.c_str())) {
-            ok = false;
-        }
-    }
-
-    // 清理多余的历史旧键，防止库缩减时残留废弃项
-    for (size_t i = m_vaults.size(); i < static_cast<size_t>(oldCount); ++i) {
-        std::wstring keyName = L"Vault_" + std::to_wstring(i) + L"_Name";
-        std::wstring keyPath = L"Vault_" + std::to_wstring(i) + L"_Path";
-        WritePrivateProfileStringW(L"Vaults", keyName.c_str(), nullptr, m_iniPath.c_str());
-        WritePrivateProfileStringW(L"Vaults", keyPath.c_str(), nullptr, m_iniPath.c_str());
-    }
-
-    // 刷新 Windows INI 缓存写入磁盘
-    WritePrivateProfileStringW(nullptr, nullptr, nullptr, m_iniPath.c_str());
-    return ok;
+        document["vaults"] = std::move(vaults); document["vault_files"] = std::move(files);
+        document["active_vault_path"] = StoredPath(m_activeVaultPath);
+        m_fingerprint = ConfigStore::Write(m_jsonPath, document, m_fingerprint);
+        m_document = std::move(document); m_lastError.clear(); return true;
+    } catch (const std::exception& error) { m_lastError = error.what(); return false; }
 }
-
-const VaultItem* VaultManager::GetVault(size_t index) const {
-    if (index < m_vaults.size()) {
-        return &m_vaults[index];
-    }
-    return nullptr;
+std::wstring VaultManager::SanitizeFileName(const std::wstring& name) {
+    auto result = name;
+    for (auto& c : result) if (c < 32 || wcschr(L"\\/:*?\"<>|", c)) c = L'_';
+    while (!result.empty() && (result.back() == L' ' || result.back() == L'.')) result.pop_back();
+    return result.empty() ? L"Notebook" : result;
 }
-
-std::wstring VaultManager::GetActiveVaultPath() const {
-    return m_activeVaultPath;
+std::wstring VaultManager::GenerateNewVaultPath(const std::wstring& name) const {
+    return (std::filesystem::path(m_notebooksDir) / (SanitizeFileName(name) + L".anynote")).wstring();
 }
-
-void VaultManager::SetActiveVaultPath(const std::wstring& path) {
-    m_activeVaultPath = path;
-    Save();
-}
-
-int VaultManager::GetActiveVaultIndex() const {
-    return FindVaultByPath(m_activeVaultPath);
-}
-
+const VaultItem* VaultManager::GetVault(size_t index) const { return index < m_vaults.size() ? &m_vaults[index] : nullptr; }
+std::wstring VaultManager::GetActiveVaultPath() const { return m_activeVaultPath; }
+int VaultManager::GetActiveVaultIndex() const { return FindVaultByPath(m_activeVaultPath); }
 std::wstring VaultManager::GetActiveVaultDisplayName() const {
-    int idx = GetActiveVaultIndex();
-    if (idx >= 0 && idx < static_cast<int>(m_vaults.size())) {
-        return m_vaults[idx].name;
-    }
-    if (!m_activeVaultPath.empty()) {
-        return std::filesystem::path(m_activeVaultPath).stem().wstring();
-    }
-    return L"未选择库";
+    const int index = GetActiveVaultIndex();
+    if (index >= 0) return m_vaults[index].name;
+    return m_activeVaultPath.empty() ? L"未选择库" : std::filesystem::path(m_activeVaultPath).stem().wstring();
 }
-
 int VaultManager::FindVaultByPath(const std::wstring& path) const {
-    for (size_t i = 0; i < m_vaults.size(); ++i) {
-        if (PathsEqual(m_vaults[i].path, path)) {
-            return static_cast<int>(i);
-        }
-    }
+    for (size_t i = 0; i < m_vaults.size(); ++i) if (PathsEqual(m_vaults[i].path, path)) return static_cast<int>(i);
     return -1;
 }
-
-bool VaultManager::AddVault(const std::wstring& name, const std::wstring& path) {
-    if (path.empty()) return false;
-
-    int idx = FindVaultByPath(path);
-    if (idx >= 0) {
-        if (!name.empty()) {
-            m_vaults[idx].name = name;
-        }
-    } else {
-        std::wstring displayName = name;
-        if (displayName.empty()) {
-            displayName = std::filesystem::path(path).stem().wstring();
-        }
-        m_vaults.push_back({ std::move(displayName), path });
-    }
-
-    Save();
-    return true;
+bool VaultManager::SetActiveVaultPath(const std::wstring& path) {
+    if (!EnsureDocument()) return false;
+    const auto previous = m_activeVaultPath; m_activeVaultPath = path;
+    if (Save()) return true;
+    m_activeVaultPath = previous; return false;
 }
-
+bool VaultManager::AddVault(const std::wstring& name, const std::wstring& path, const std::string& verifiedUid) {
+    if (path.empty() || (!verifiedUid.empty() && !ValidUid(verifiedUid)) || !EnsureDocument()) return false;
+    const auto previous = m_vaults;
+    const auto absolutePath = ResolvePath(anynote::utils::WideToUtf8(path));
+    const int index = FindVaultByPath(absolutePath);
+    if (index >= 0) {
+        if (!name.empty()) m_vaults[index].name = name;
+        if (!verifiedUid.empty()) m_vaults[index].uid = verifiedUid;
+    }
+    else m_vaults.push_back({name.empty() ? std::filesystem::path(path).stem().wstring() : name, absolutePath, verifiedUid});
+    if (Save()) return true;
+    m_vaults = previous; return false;
+}
 bool VaultManager::RemoveVault(size_t index) {
-    if (index >= m_vaults.size()) return false;
-
-    bool wasActive = PathsEqual(m_vaults[index].path, m_activeVaultPath);
+    if (!EnsureDocument() || index >= m_vaults.size()) return false;
+    const auto previous = m_vaults; const auto active = m_activeVaultPath;
+    bool selected = PathsEqual(m_vaults[index].path, active);
     m_vaults.erase(m_vaults.begin() + index);
-
-    if (wasActive) {
-        if (!m_vaults.empty()) {
-            m_activeVaultPath = m_vaults.front().path;
-        } else {
-            m_activeVaultPath.clear();
-        }
-    }
-
-    Save();
-    return true;
+    if (selected) m_activeVaultPath = m_vaults.empty() ? L"" : m_vaults.front().path;
+    if (Save()) return true;
+    m_vaults = previous; m_activeVaultPath = active; return false;
 }
-
-bool VaultManager::RenameVault(size_t index, const std::wstring& newName) {
-    if (index >= m_vaults.size() || newName.empty()) return false;
-
-    m_vaults[index].name = newName;
-    Save();
-    return true;
+bool VaultManager::RenameVault(size_t index, const std::wstring& name) {
+    if (!EnsureDocument() || index >= m_vaults.size() || name.empty()) return false;
+    auto previous = m_vaults[index].name; m_vaults[index].name = name;
+    if (Save()) return true;
+    m_vaults[index].name = previous; return false;
 }
-
-std::wstring VaultManager::GetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& defaultValue) const {
-    if (!std::filesystem::exists(m_iniPath)) {
-        return defaultValue;
-    }
-    wchar_t buf[256] = {0};
-    GetPrivateProfileStringW(
-        section.c_str(),
-        key.c_str(),
-        defaultValue.c_str(),
-        buf,
-        static_cast<DWORD>(std::size(buf)),
-        m_iniPath.c_str()
-    );
-    return buf;
+std::wstring VaultManager::GetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& fallback) const {
+    if (!m_loaded) { VaultManager copy(m_iniPath); return copy.EnsureDocument() ? copy.GetConfigString(section, key, fallback) : fallback; }
+    return Setting(m_document.at("settings"), section, key, fallback);
 }
-
 bool VaultManager::SetConfigString(const std::wstring& section, const std::wstring& key, const std::wstring& value) {
-    EnsureIniFileExists();
-    BOOL ok = WritePrivateProfileStringW(
-        section.c_str(),
-        key.c_str(),
-        value.c_str(),
-        m_iniPath.c_str()
-    );
-    return (ok != FALSE);
+    if (!EnsureDocument()) return false;
+    auto previous = m_document;
+    auto& settings = m_document["settings"];
+    auto& group = settings[ExistingKey(settings, section)];
+    if (group.is_null()) group = Json::object();
+    if (!group.is_object()) { m_lastError = "CONFIG_INVALID_SECTION"; return false; }
+    group[ExistingKey(group, key)] = anynote::utils::WideToUtf8(value);
+    if (Save()) return true;
+    m_document = previous; return false;
 }
-
-} // namespace anynote::storage
+bool VaultManager::RegisterVaultIdentity(const std::wstring& path, const std::string& uid) {
+    if (!EnsureDocument() || !ValidUid(uid)) return false;
+    int index = FindVaultByPath(path); if (index < 0) return false;
+    const auto old = m_vaults[index].uid; m_vaults[index].uid = uid;
+    if (Save()) return true;
+    m_vaults[index].uid = old; return false;
+}
+std::vector<size_t> VaultManager::FindVaultsByUid(const std::string& uid) const {
+    std::vector<size_t> result;
+    for (size_t i = 0; i < m_vaults.size(); ++i) if (m_vaults[i].uid == uid && !uid.empty()) result.push_back(i);
+    return result;
+}
+}
