@@ -283,3 +283,50 @@ BEGIN
     PUSHBUTTON      "取消(&C)", IDCANCEL, 154, 52, 50, 16
 END
 
+// ===========================================================================
+// 版本信息
+// ===========================================================================
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION        1,1,0,0
+PRODUCTVERSION     1,1,0,0
+FILEFLAGSMASK      0x3fL
+#ifdef _DEBUG
+FILEFLAGS          VS_FF_DEBUG
+#else
+FILEFLAGS          0x0L
+#endif
+FILEOS             VOS_NT_WINDOWS32
+FILETYPE           VFT_APP
+FILESUBTYPE        VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0" // 中文 (简体)
+        BEGIN
+            VALUE "CompanyName",      "AnyNote"
+            VALUE "FileDescription",  "AnyNote 桌面笔记"
+            VALUE "FileVersion",      "1.1.0"
+            VALUE "InternalName",     "AnyNote.exe"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 AnyNote. All rights reserved."
+            VALUE "OriginalFilename", "AnyNote.exe"
+            VALUE "ProductName",      "AnyNote"
+            VALUE "ProductVersion",   "1.1.0"
+        END
+        BLOCK "040904b0" // 英文 (美国)
+        BEGIN
+            VALUE "CompanyName",      "AnyNote"
+            VALUE "FileDescription",  "AnyNote Desktop Notes"
+            VALUE "FileVersion",      "1.1.0"
+            VALUE "InternalName",     "AnyNote.exe"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 AnyNote. All rights reserved."
+            VALUE "OriginalFilename", "AnyNote.exe"
+            VALUE "ProductName",      "AnyNote"
+            VALUE "ProductVersion",   "1.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200, 0x409, 1200
+    END
+END

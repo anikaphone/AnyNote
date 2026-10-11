@@ -49,7 +49,8 @@ New-Item -ItemType Directory -Force (Join-Path $stagingDir "certs") | Out-Null
 # 4. 生成 TLS 自签证书 (注入 VPS 的 IP/域名)
 Write-Host "[+] 2. 正在为 $VpsHost 专属生成 TLS 证书与私钥..." -ForegroundColor Yellow
 $certHosts = "$VpsHost,127.0.0.1,localhost"
-& $certGenTool -dir (Join-Path $stagingDir "certs") -hosts $certHosts
+$certUri = "https://$($VpsHost):$Port"
+& $certGenTool -dir (Join-Path $stagingDir "certs") -hosts $certHosts -uri $certUri
 if ($LASTEXITCODE -ne 0) { throw "证书生成失败" }
 
 # 5. 生成 server.json 配置文件

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ func writeNew(path string, bytes []byte) error {
 func run() error {
 	directory := flag.String("dir", "certs", "output directory; existing files are never overwritten")
 	hosts := flag.String("hosts", "localhost,127.0.0.1", "comma-separated exact DNS names and IP addresses used by clients")
+	uriStr := flag.String("uri", "", "optional service URL to embed in SAN (e.g. https://1.2.3.4:8443)")
 	flag.Parse()
 	if err := os.MkdirAll(*directory, 0700); err != nil {
 		return err
@@ -61,6 +63,13 @@ func run() error {
 		} else {
 			template.DNSNames = append(template.DNSNames, host)
 		}
+	}
+	if *uriStr != "" {
+		u, err := url.Parse(*uriStr)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return errors.New("invalid URI")
+		}
+		template.URIs = append(template.URIs, u)
 	}
 	certificate, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
 	if err != nil {

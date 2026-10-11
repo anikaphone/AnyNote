@@ -6,9 +6,127 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <uxtheme.h>
+#include <wincrypt.h>
+#include <fstream>
 #include <algorithm>
 
 namespace anynote::ui {
+
+namespace {
+
+static std::wstring ExtractServerUrlFromCertificate(const std::wstring& certPath) {
+    if (certPath.empty() || !std::filesystem::exists(certPath)) {
+        return L"";
+    }
+
+    std::ifstream file(std::filesystem::path(certPath), std::ios::binary);
+    if (!file.is_open()) return L"";
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+    if (content.empty()) return L"";
+
+    DWORD derSize = 0;
+    if (!CryptStringToBinaryA(content.c_str(), static_cast<DWORD>(content.size()),
+        CRYPT_STRING_BASE64HEADER, nullptr, &derSize, nullptr, nullptr)) {
+        if (!CryptStringToBinaryA(content.c_str(), static_cast<DWORD>(content.size()),
+            CRYPT_STRING_BASE64_ANY, nullptr, &derSize, nullptr, nullptr)) {
+            derSize = 0;
+        }
+    }
+
+    std::vector<BYTE> derBytes;
+    if (derSize > 0) {
+        derBytes.resize(derSize);
+        CryptStringToBinaryA(content.c_str(), static_cast<DWORD>(content.size()),
+            CRYPT_STRING_BASE64_ANY, derBytes.data(), &derSize, nullptr, nullptr);
+    } else {
+        derBytes.assign(content.begin(), content.end());
+    }
+
+    PCCERT_CONTEXT pCert = CertCreateCertificateContext(
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        derBytes.data(), static_cast<DWORD>(derBytes.size())
+    );
+    if (!pCert) return L"";
+
+    std::wstring foundUrl;
+    std::wstring fallbackHost;
+
+    PCERT_EXTENSION pExt = CertFindExtension(szOID_SUBJECT_ALT_NAME2, pCert->pCertInfo->cExtension, pCert->pCertInfo->rgExtension);
+    if (pExt) {
+        DWORD decodedSize = 0;
+        CERT_ALT_NAME_INFO* pAltInfo = nullptr;
+        if (CryptDecodeObjectEx(X509_ASN_ENCODING, szOID_SUBJECT_ALT_NAME2,
+            pExt->Value.pbData, pExt->Value.cbData,
+            CRYPT_DECODE_ALLOC_FLAG, nullptr, &pAltInfo, &decodedSize) && pAltInfo) {
+
+            for (DWORD i = 0; i < pAltInfo->cAltEntry; ++i) {
+                const auto& entry = pAltInfo->rgAltEntry[i];
+                if (entry.dwAltNameChoice == CERT_ALT_NAME_URL && entry.pwszURL) {
+                    foundUrl = entry.pwszURL;
+                    break;
+                }
+                if (fallbackHost.empty()) {
+                    if (entry.dwAltNameChoice == CERT_ALT_NAME_DNS_NAME && entry.pwszDNSName) {
+                        std::wstring dns = entry.pwszDNSName;
+                        if (dns != L"localhost" && dns != L"127.0.0.1") {
+                            fallbackHost = dns;
+                        }
+                    } else if (entry.dwAltNameChoice == CERT_ALT_NAME_IP_ADDRESS && entry.IPAddress.pbData) {
+                        if (entry.IPAddress.cbData == 4) {
+                            BYTE* b = entry.IPAddress.pbData;
+                            if (!(b[0] == 127 && b[1] == 0 && b[2] == 0 && b[3] == 1)) {
+                                wchar_t ipBuf[64] = {};
+                                swprintf_s(ipBuf, L"%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+                                fallbackHost = ipBuf;
+                            }
+                        }
+                    }
+                }
+            }
+            LocalFree(pAltInfo);
+        }
+    }
+
+    CertFreeCertificateContext(pCert);
+
+    if (!foundUrl.empty()) {
+        return foundUrl;
+    }
+    if (!fallbackHost.empty()) {
+        return L"https://" + fallbackHost + L":8443";
+    }
+    return L"";
+}
+
+static std::wstring FindDefaultCertificatePath(const std::wstring& exeDir, const std::wstring& configuredCa) {
+    if (!configuredCa.empty() && std::filesystem::exists(configuredCa)) {
+        return configuredCa;
+    }
+    std::filesystem::path dir(exeDir);
+    auto p1 = dir / L"server.crt";
+    if (std::filesystem::exists(p1)) return p1.wstring();
+
+    auto p2 = dir / L"certs" / L"server.crt";
+    if (std::filesystem::exists(p2)) return p2.wstring();
+
+    try {
+        std::wstring candidate;
+        int count = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == L".crt") {
+                candidate = entry.path().wstring();
+                count++;
+            }
+        }
+        if (count == 1) return candidate;
+    } catch (...) {}
+
+    return configuredCa.empty() ? (dir / L"server.crt").wstring() : configuredCa;
+}
+
+} // namespace
+
 CloudSync::CloudSync(HWND owner, storage::VaultManager& manager, std::function<storage::Database&()> database, std::function<void()> refresh)
     : m_owner(owner), m_manager(manager), m_database(std::move(database)), m_refresh(std::move(refresh)) {}
 std::wstring CloudSync::CredentialPath() const { return (std::filesystem::path(m_manager.GetJsonPath()).parent_path() / L"credentials.dat").wstring(); }
@@ -105,8 +223,27 @@ INT_PTR CALLBACK CloudSync::AccountProc(HWND dialog, UINT message, WPARAM wParam
             EnableThemeDialogTexture(dialog, ETDT_ENABLETAB);
             self = reinterpret_cast<CloudSync*>(lParam); SetWindowLongPtrW(dialog, DWLP_USER, lParam);
             int index = 0; for (const auto* name : {L"登录", L"注册", L"改密"}) { TCITEMW item{}; item.mask = TCIF_TEXT; item.pszText = const_cast<wchar_t*>(name); TabCtrl_InsertItem(GetDlgItem(dialog, IDC_SYNC_TAB), index++, &item); }
-            SetDlgItemTextW(dialog, IDC_SYNC_URL, self->m_manager.GetConfigString(L"Sync", L"ServerUrl", L"https://localhost:8443").c_str());
-            SetDlgItemTextW(dialog, IDC_SYNC_CA, self->m_manager.GetConfigString(L"Sync", L"CaFile", (std::filesystem::path(self->m_manager.GetExeDir()) / L"certs/server.crt").wstring()).c_str());
+            std::wstring exeDir = self->m_manager.GetExeDir();
+            std::wstring configuredUrl = self->m_manager.GetConfigString(L"Sync", L"ServerUrl");
+            std::wstring configuredCa = self->m_manager.GetConfigString(L"Sync", L"CaFile");
+
+            std::wstring caToUse = FindDefaultCertificatePath(exeDir, configuredCa);
+            std::wstring urlToUse = configuredUrl;
+
+            if (urlToUse.empty() || urlToUse == L"https://localhost:8443") {
+                if (!caToUse.empty()) {
+                    std::wstring extracted = ExtractServerUrlFromCertificate(caToUse);
+                    if (!extracted.empty()) {
+                        urlToUse = extracted;
+                    }
+                }
+            }
+            if (urlToUse.empty()) {
+                urlToUse = L"https://localhost:8443";
+            }
+
+            SetDlgItemTextW(dialog, IDC_SYNC_URL, urlToUse.c_str());
+            SetDlgItemTextW(dialog, IDC_SYNC_CA, caToUse.c_str());
             SetDlgItemTextW(dialog, IDC_SYNC_USER, self->m_manager.GetConfigString(L"Sync", L"Username").c_str());
             for (int id : {IDC_SYNC_PASSWORD, IDC_SYNC_NEW_PASSWORD}) SendDlgItemMessageW(dialog, id, EM_SETLIMITTEXT, 256, 0);
             CheckDlgButton(dialog, IDC_SYNC_REMEMBER, self->m_manager.GetConfigString(L"Sync", L"RememberPassword", L"0") == L"1" ? BST_CHECKED : BST_UNCHECKED);
@@ -141,7 +278,17 @@ INT_PTR CALLBACK CloudSync::AccountProc(HWND dialog, UINT message, WPARAM wParam
             case IDC_SYNC_BROWSE: {
                 wchar_t file[32768]{}; OPENFILENAMEW ofn{sizeof(ofn)}; ofn.hwndOwner = dialog; ofn.lpstrFile = file; ofn.nMaxFile = 32768;
                 ofn.lpstrFilter = L"证书 (*.crt;*.pem)\0*.crt;*.pem\0所有文件\0*.*\0"; ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-                if (GetOpenFileNameW(&ofn)) SetDlgItemTextW(dialog, IDC_SYNC_CA, file); return TRUE;
+                if (GetOpenFileNameW(&ofn)) {
+                    SetDlgItemTextW(dialog, IDC_SYNC_CA, file);
+                    auto curUrl = SyncControlText(dialog, IDC_SYNC_URL);
+                    if (curUrl.empty() || curUrl == L"https://localhost:8443") {
+                        std::wstring extracted = ExtractServerUrlFromCertificate(file);
+                        if (!extracted.empty()) {
+                            SetDlgItemTextW(dialog, IDC_SYNC_URL, extracted.c_str());
+                        }
+                    }
+                }
+                return TRUE;
             }
             }
         }
