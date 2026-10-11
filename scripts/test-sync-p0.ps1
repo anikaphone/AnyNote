@@ -1,5 +1,5 @@
 param(
-    [string]$BuildDirectory = 'build',
+    [string]$BuildDirectory = 'build/bin',
     [switch]$Scale,
     [switch]$ExistingRegression
 )
@@ -9,7 +9,8 @@ $build = [IO.Path]::GetFullPath((Join-Path $repo $BuildDirectory))
 $scratch = Join-Path ([IO.Path]::GetTempPath()) ('AnyNote-sync-p0-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch | Out-Null
 Write-Output "Evidence and isolated test data: $scratch"
-$probe = Join-Path $build 'p0/p0probe.exe'
+$probe = Join-Path $repo 'build/temp/p0/p0probe.exe'
+if (!(Test-Path -LiteralPath $probe)) { $probe = Join-Path $build 'p0/p0probe.exe' }
 if (!(Test-Path -LiteralPath $probe)) { throw 'Build src/AnyNoteServer/cmd/p0probe first.' }
 $tlsDir = Join-Path $scratch 'tls'
 $process = Start-Process -FilePath $probe -ArgumentList @('-dir', ('"{0}"' -f $tlsDir)) -PassThru -WindowStyle Hidden `

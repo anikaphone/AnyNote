@@ -22,29 +22,35 @@ try {
     if ($LASTEXITCODE -ne 0 -or $format) { throw "gofmt required: $format" }
     go vet ./...
     if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
+    $env:GOCACHE = Join-Path $repo 'build/temp/go-cache'
     go test -count=1 -v ./...
     if ($LASTEXITCODE -ne 0) { throw 'go test failed' }
-    New-Item -ItemType Directory -Force (Join-Path $repo 'build/p0') | Out-Null
-    go build -trimpath -o ../../build/p0/p0probe.exe ./cmd/p0probe
+    New-Item -ItemType Directory -Force (Join-Path $repo 'build/temp/p0') | Out-Null
+    go build -trimpath -o ../../build/temp/p0/p0probe.exe ./cmd/p0probe
     if ($LASTEXITCODE -ne 0) { throw 'Windows probe build failed' }
+    New-Item -ItemType Directory -Force (Join-Path $repo 'build/bin') | Out-Null
     foreach ($configuration in @('Debug','Release')) {
-        $output = Join-Path $repo "build/server/$configuration"
+        $output = Join-Path $repo "build/bin/server/$configuration"
         New-Item -ItemType Directory -Force $output | Out-Null
         foreach ($command in @('anynote-server','anynote-admin','anynote-cert')) {
-            $buildArgs = @('build','-trimpath','-o',(Join-Path $output "$command.exe"))
+            $binPath = Join-Path $output "$command.exe"
+            $buildArgs = @('build','-trimpath','-o',$binPath)
             if ($configuration -eq 'Debug') { $buildArgs += @('-gcflags','all=-N -l') }
             $buildArgs += "./cmd/$command"
             & go @buildArgs
             if ($LASTEXITCODE -ne 0) { throw "$configuration $command build failed" }
+            if ($configuration -eq 'Release') {
+                Copy-Item -LiteralPath $binPath -Destination (Join-Path $repo "build/bin/$command.exe") -Force
+            }
         }
     }
     if ($LinuxBuild) {
         $env:GOOS='linux'
-        go build -trimpath -o ../../build/p0/p0probe-linux ./cmd/p0probe
+        go build -trimpath -o ../../build/temp/p0/p0probe-linux ./cmd/p0probe
         if ($LASTEXITCODE -ne 0) { throw 'Linux probe build failed' }
-        go test -c -o ../../build/p0/protocol-linux.test ./internal/protocol
+        go test -c -o ../../build/temp/p0/protocol-linux.test ./internal/protocol
         if ($LASTEXITCODE -ne 0) { throw 'Linux tests build failed' }
-        $output = Join-Path $repo 'build/server/linux-amd64'
+        $output = Join-Path $repo 'build/bin/server/linux-amd64'
         New-Item -ItemType Directory -Force $output | Out-Null
         foreach ($command in @('anynote-server','anynote-admin','anynote-cert')) {
             go build -trimpath -o (Join-Path $output $command) "./cmd/$command"

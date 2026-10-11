@@ -34,7 +34,7 @@ cmake --build --preset debug --parallel 2
 cmake --build --preset release --parallel 2
 ```
 
-产物位于 `build/Debug/` 或 `build/Release/`，主程序为 `AnyNote.exe`。当前没有 vcpkg manifest；配置前需在对应 vcpkg 环境中准备依赖。若已有构建目录的生成器或工具链与预设不一致，先核查缓存，使用独立构建目录，避免直接删除已有产物。
+产物位于 `build/bin/Debug/` 或 `build/bin/Release/`（Release 主程序同步拷贝至 `build/bin/AnyNote.exe`），中间编译与工程文件位于 `build/temp/`。当前没有 vcpkg manifest；配置前需在对应 vcpkg 环境中准备依赖。若已有构建目录的生成器或工具链与预设不一致，先核查缓存，使用独立构建目录，避免直接删除已有产物。
 
 保持现有静态链接约定：SQLite3MC 静态目标和 MSVC `/MT`（Debug 为 `/MTd`）。保留 UTF-8 编译选项及 `UNICODE`、`_UNICODE`、`NOMINMAX` 等定义。新增源文件或链接依赖时同步更新相关 CMake 目标。
 
@@ -49,7 +49,7 @@ cmake --build --preset release --parallel 2
 `test_storage` 使用相对测试路径并删除同名文件，应在新建的临时目录中运行。以下示例针对 Debug；验证 Release 时替换配置名：
 
 ```bash
-$testBin = Join-Path $PWD.Path 'build/Debug'
+$testBin = Join-Path $PWD.Path 'build/bin/Debug'
 $testDir = Join-Path ([System.IO.Path]::GetTempPath()) ('AnyNote-tests-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testDir | Out-Null
 Push-Location $testDir

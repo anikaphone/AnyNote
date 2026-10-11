@@ -6,11 +6,23 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # 确保 MSVC 正确解析 UTF-8 编码，并禁用 min/max 宏冲突
 if (MSVC)
-    add_compile_options(/utf-8 /permissive-)
+    # Let MSVC compile independent translation units concurrently. This is
+    # especially useful for the client, which has many UI/storage sources.
+    add_compile_options(/utf-8 /permissive- /MP)
     set(CMAKE_RC_FLAGS "${CMAKE_RC_FLAGS} /c65001")
 endif()
 add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 
+# 成品可执行程序输出到 build/bin，中间库与归档文件输出到 build/temp/lib
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/build/bin/Debug")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build/bin/Release")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/temp/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/build/temp/lib/Debug")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build/temp/lib/Release")
+set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build/bin")
+set(CMAKE_PDB_OUTPUT_DIRECTORY_DEBUG "${CMAKE_SOURCE_DIR}/build/bin/Debug")
+set(CMAKE_PDB_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/build/bin/Release")
 
 # 寻找 sqlite3mc (vcpkg 静态库配置)
 find_package(sqlite3mc CONFIG REQUIRED)
@@ -69,6 +81,13 @@ if (MSVC)
         MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Release>:ProgramDatabase>")
 endif()
 
+add_custom_command(TARGET AnyNote POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:AnyNote>"
+        "${CMAKE_SOURCE_DIR}/build/bin/$<TARGET_FILE_NAME:AnyNote>"
+    COMMENT "Copying executable to build/bin"
+)
+
 target_include_directories(AnyNote PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
@@ -90,8 +109,33 @@ set_property(TARGET AnyNote PROPERTY
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
 )
 
+# 启用预编译头 (PCH)，大幅减少 Windows SDK、STL 及大型三方库 (nlohmann_json/sqlite) 的重复解析耗时
+target_precompile_headers(AnyNote PRIVATE
+    <windows.h>
+    <windowsx.h>
+    <commctrl.h>
+    <richedit.h>
+    <ole2.h>
+    <gdiplus.h>
+    <shlwapi.h>
+    <uxtheme.h>
+    <string>
+    <string_view>
+    <vector>
+    <memory>
+    <unordered_map>
+    <map>
+    <algorithm>
+    <chrono>
+    <filesystem>
+    <optional>
+    <functional>
+    <sqlite3.h>
+    <nlohmann/json.hpp>
+)
+
 # 单元测试目标
-add_executable(test_storage
+add_executable(test_storage EXCLUDE_FROM_ALL
     tests/test_storage.cpp
     src/AnyNoteClient/storage/Database.cpp
     src/AnyNoteClient/storage/Database.h
@@ -116,7 +160,7 @@ set_property(TARGET test_storage PROPERTY
 )
 
 # Native editor regression test; uses a scratch window without opening any vault.
-add_executable(test_codeblock_hover
+add_executable(test_codeblock_hover EXCLUDE_FROM_ALL
     tests/test_codeblock_hover.cpp
     src/AnyNoteClient/ui/RichEditView.cpp
     src/AnyNoteClient/ui/TableEditor.cpp
@@ -134,7 +178,7 @@ set_property(TARGET test_codeblock_hover PROPERTY
 )
 
 # Table selection and alignment regression test using a real RichEdit window.
-add_executable(test_table_editing
+add_executable(test_table_editing EXCLUDE_FROM_ALL
     tests/test_table_editing.cpp
     src/AnyNoteClient/ui/RichEditView.cpp
     src/AnyNoteClient/ui/TableEditor.cpp
@@ -154,7 +198,7 @@ set_property(TARGET test_table_editing PROPERTY
 # Exercise tree filtering and global navigation through the real window handlers.
 set(NODE_SEARCH_TEST_SOURCES ${SOURCES})
 list(REMOVE_ITEM NODE_SEARCH_TEST_SOURCES src/AnyNoteClient/main.cpp)
-add_executable(test_node_search tests/test_node_search.cpp ${NODE_SEARCH_TEST_SOURCES})
+add_executable(test_node_search EXCLUDE_FROM_ALL tests/test_node_search.cpp ${NODE_SEARCH_TEST_SOURCES})
 target_include_directories(test_node_search PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient
     ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient/res
@@ -168,7 +212,7 @@ set_property(TARGET test_node_search PROPERTY
 )
 
 # Outline view extraction and navigation regression test
-add_executable(test_outline
+add_executable(test_outline EXCLUDE_FROM_ALL
     tests/test_outline.cpp
     src/AnyNoteClient/ui/OutlinePane.cpp
     src/AnyNoteClient/ui/OutlinePane.h
@@ -206,19 +250,19 @@ add_library(anynote_sync_protocol STATIC
 )
 target_include_directories(anynote_sync_protocol PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient)
 target_link_libraries(anynote_sync_protocol PUBLIC nlohmann_json::nlohmann_json bcrypt crypt32)
-add_executable(test_sync_protocol tests/test_sync_protocol.cpp)
+add_executable(test_sync_protocol EXCLUDE_FROM_ALL tests/test_sync_protocol.cpp)
 target_link_libraries(test_sync_protocol PRIVATE anynote_sync_protocol psapi)
-add_executable(test_sync_storage tests/test_sync_storage.cpp src/AnyNoteClient/storage/Database.cpp)
+add_executable(test_sync_storage EXCLUDE_FROM_ALL tests/test_sync_storage.cpp src/AnyNoteClient/storage/Database.cpp)
 target_include_directories(test_sync_storage PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/AnyNoteClient)
 target_link_libraries(test_sync_storage PRIVATE sqlite3mc::sqlite3mc_static)
-add_executable(test_sync_tls tests/test_sync_tls.cpp)
+add_executable(test_sync_tls EXCLUDE_FROM_ALL tests/test_sync_tls.cpp)
 target_link_libraries(test_sync_tls PRIVATE CURL::libcurl nlohmann_json::nlohmann_json)
 foreach(target anynote_sync_protocol test_sync_protocol test_sync_storage test_sync_tls)
     set_property(TARGET ${target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endforeach()
 
 
-add_executable(test_sync_migration tests/test_sync_migration.cpp
+add_executable(test_sync_migration EXCLUDE_FROM_ALL tests/test_sync_migration.cpp
     src/AnyNoteClient/storage/Database.cpp
     src/AnyNoteClient/storage/NoteRepository.cpp
     src/AnyNoteClient/storage/SchemaMigrator.cpp
@@ -238,7 +282,7 @@ foreach(target AnyNote test_storage test_node_search)
     target_sources(${target} PRIVATE src/AnyNoteClient/storage/ConfigStore.cpp)
 endforeach()
 
-add_executable(test_sync_config tests/test_sync_config.cpp
+add_executable(test_sync_config EXCLUDE_FROM_ALL tests/test_sync_config.cpp
     src/AnyNoteClient/storage/VaultManager.cpp
     src/AnyNoteClient/storage/ConfigStore.cpp
     src/AnyNoteClient/storage/VaultFileLease.cpp)
@@ -248,7 +292,7 @@ set_property(TARGET test_sync_config PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreade
 foreach(target AnyNote test_storage test_node_search test_sync_migration)
     target_sources(${target} PRIVATE src/AnyNoteClient/storage/SnapshotService.cpp)
 endforeach()
-add_executable(test_sync_snapshot tests/test_sync_snapshot.cpp
+add_executable(test_sync_snapshot EXCLUDE_FROM_ALL tests/test_sync_snapshot.cpp
     src/AnyNoteClient/storage/Database.cpp
     src/AnyNoteClient/storage/NoteRepository.cpp
     src/AnyNoteClient/storage/SchemaMigrator.cpp
@@ -272,7 +316,7 @@ add_library(anynote_sync_client STATIC
 target_link_libraries(anynote_sync_client PUBLIC anynote_sync_protocol CURL::libcurl)
 set_property(TARGET anynote_sync_client PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 target_link_libraries(AnyNote PRIVATE anynote_sync_client)
-add_executable(test_sync_client tests/test_sync_client.cpp
+add_executable(test_sync_client EXCLUDE_FROM_ALL tests/test_sync_client.cpp
     src/AnyNoteClient/storage/ConfigStore.cpp
     src/AnyNoteClient/storage/VaultFileLease.cpp)
 target_link_libraries(test_sync_client PRIVATE anynote_sync_client psapi)
@@ -291,10 +335,10 @@ endforeach()
 
 get_target_property(SYNC_E2E_SOURCES test_sync_snapshot SOURCES)
 list(REMOVE_ITEM SYNC_E2E_SOURCES tests/test_sync_snapshot.cpp)
-add_executable(test_sync_e2e tests/test_sync_e2e.cpp ${SYNC_E2E_SOURCES})
+add_executable(test_sync_e2e EXCLUDE_FROM_ALL tests/test_sync_e2e.cpp ${SYNC_E2E_SOURCES})
 target_link_libraries(test_sync_e2e PRIVATE anynote_sync_client sqlite3mc::sqlite3mc_static)
 set_property(TARGET test_sync_e2e PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-add_executable(test_realtime_sync tests/test_realtime_sync.cpp ${SYNC_E2E_SOURCES}
+add_executable(test_realtime_sync EXCLUDE_FROM_ALL tests/test_realtime_sync.cpp ${SYNC_E2E_SOURCES}
     src/AnyNoteClient/storage/RealtimeStore.cpp src/AnyNoteClient/sync/RealtimeSync.cpp)
 target_link_libraries(test_realtime_sync PRIVATE anynote_sync_client sqlite3mc::sqlite3mc_static)
 set_property(TARGET test_realtime_sync PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

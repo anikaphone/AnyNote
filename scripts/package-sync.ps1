@@ -12,10 +12,19 @@ New-Item -ItemType Directory -Path $output | Out-Null
 foreach ($directory in @('client','server-windows','server-linux','licenses/client','licenses/go','docs','protocol')) {
     New-Item -ItemType Directory -Path (Join-Path $output $directory) | Out-Null
 }
-Copy-Item -LiteralPath (Join-Path $repo 'build/Release/AnyNote.exe') -Destination (Join-Path $output 'client')
+$clientBin = Join-Path $repo 'build/bin/Release/AnyNote.exe'
+if (!(Test-Path -LiteralPath $clientBin)) { $clientBin = Join-Path $repo 'build/bin/AnyNote.exe' }
+if (!(Test-Path -LiteralPath $clientBin)) { $clientBin = Join-Path $repo 'build/Release/AnyNote.exe' }
+Copy-Item -LiteralPath $clientBin -Destination (Join-Path $output 'client')
 foreach ($command in @('anynote-server','anynote-admin','anynote-cert')) {
-    Copy-Item -LiteralPath (Join-Path $repo "build/server/Release/$command.exe") -Destination (Join-Path $output 'server-windows')
-    Copy-Item -LiteralPath (Join-Path $repo "build/server/linux-amd64/$command") -Destination (Join-Path $output 'server-linux')
+    $serverWin = Join-Path $repo "build/bin/server/Release/$command.exe"
+    if (!(Test-Path -LiteralPath $serverWin)) { $serverWin = Join-Path $repo "build/bin/$command.exe" }
+    if (!(Test-Path -LiteralPath $serverWin)) { $serverWin = Join-Path $repo "build/server/Release/$command.exe" }
+    Copy-Item -LiteralPath $serverWin -Destination (Join-Path $output 'server-windows')
+
+    $serverLinux = Join-Path $repo "build/bin/server/linux-amd64/$command"
+    if (!(Test-Path -LiteralPath $serverLinux)) { $serverLinux = Join-Path $repo "build/server/linux-amd64/$command" }
+    Copy-Item -LiteralPath $serverLinux -Destination (Join-Path $output 'server-linux')
 }
 foreach ($directory in @('server-windows','server-linux')) {
     foreach ($file in @('README.md','server.example.json')) {
