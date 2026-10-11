@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <string>
 
 namespace anynote::ui {
 
@@ -21,11 +22,13 @@ public:
     int GetSelectedHeadingIndex() const;
 
     void SetOutlineButtonChecked(bool checked);
+    void SetRealtimeStatus(bool checked, const std::wstring& text);
 
 private:
     HWND m_hWnd = nullptr;
     HWND m_hParent = nullptr;
     HWND m_hHeadingCombo = nullptr;
+    HWND m_hSyncStatus = nullptr;
     HFONT m_hFont = nullptr;
     UINT m_fontDpi = 0;
     HIMAGELIST m_hImageList = nullptr;

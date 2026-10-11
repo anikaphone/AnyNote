@@ -4,6 +4,7 @@
 #include "res/resource.h"
 #include <commctrl.h>
 #include <windowsx.h>
+#include <uxtheme.h>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -23,6 +24,7 @@ void Tab(HWND dialog, bool details) {
     ShowWindow(GetDlgItem(dialog, IDC_SYNC_LIST), details ? SW_HIDE : SW_SHOW);
     for (int id : {IDC_SYNC_TREE, IDC_SYNC_DIFF, IDC_SYNC_BACK}) ShowWindow(GetDlgItem(dialog, id), details ? SW_SHOW : SW_HIDE);
     TabCtrl_SetCurSel(GetDlgItem(dialog, IDC_SYNC_TAB), details ? 1 : 0);
+    InvalidateRect(dialog, nullptr, TRUE);
 }
 std::wstring Flags(unsigned flags) {
     std::wstring result;
@@ -215,11 +217,17 @@ INT_PTR CALLBACK CloudSync::ManageProc(HWND dialog, UINT message, WPARAM wParam,
     auto* self = reinterpret_cast<CloudSync*>(GetWindowLongPtrW(dialog, DWLP_USER));
     try {
         if (message == WM_INITDIALOG) {
+            EnableThemeDialogTexture(dialog, ETDT_ENABLETAB);
             self = reinterpret_cast<CloudSync*>(lParam); SetWindowLongPtrW(dialog, DWLP_USER, lParam);
             int index = 0; for (const auto* name : {L"数据库表", L"库详情"}) { TCITEMW item{}; item.mask = TCIF_TEXT; item.pszText = const_cast<wchar_t*>(name); TabCtrl_InsertItem(GetDlgItem(dialog, IDC_SYNC_TAB), index++, &item); }
-            Columns(GetDlgItem(dialog, IDC_SYNC_LIST), {{L"UID", 150}, {L"数据库名", 180}, {L"创建时间（本地）", 170}, {L"更新时间（本地）", 170}, {L"备注", 260}});
-            Columns(GetDlgItem(dialog, IDC_SYNC_DIFF), {{L"标题", 150}, {L"差异", 130}, {L"sync_id", 270}, {L"本地 / 远端 id", 120}, {L"parent_sync_id", 270}, {L"修改时间（本地）", 170}});
+            Columns(GetDlgItem(dialog, IDC_SYNC_LIST), {{L"UID", 100}, {L"数据库名", 110}, {L"创建时间（本地）", 125}, {L"更新时间（本地）", 125}, {L"备注", 150}});
+            Columns(GetDlgItem(dialog, IDC_SYNC_DIFF), {{L"标题", 100}, {L"差异", 65}, {L"sync_id", 115}, {L"本地 / 远端 id", 75}, {L"parent_sync_id", 115}, {L"修改时间（本地）", 125}});
             Tab(dialog, false); self->RefreshVaults(dialog); return TRUE;
+        }
+        if (message == WM_CTLCOLORSTATIC) {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkMode(hdc, TRANSPARENT);
+            return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
         }
         if (!self) return FALSE;
         if (message == WM_CONTEXTMENU) { self->ContextMenu(dialog, reinterpret_cast<HWND>(wParam), {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}); return TRUE; }

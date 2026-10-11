@@ -12,6 +12,8 @@ public:
     void Command(int command);
     void AutoLogin();
     bool IsLoggedIn() const { return m_client && m_client->IsLoggedIn(); }
+    std::unique_ptr<sync::SyncClient> RealtimeClient() const { return IsLoggedIn() ? m_client->Clone() : nullptr; }
+    std::string RealtimeBinding() const { return IsLoggedIn() ? m_client->BaseUrl() + "|" + m_accountId : ""; }
 private:
     static INT_PTR CALLBACK AccountProc(HWND, UINT, WPARAM, LPARAM);
     static INT_PTR CALLBACK ManageProc(HWND, UINT, WPARAM, LPARAM);

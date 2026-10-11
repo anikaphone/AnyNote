@@ -279,6 +279,9 @@ target_link_libraries(test_sync_client PRIVATE anynote_sync_client psapi)
 set_property(TARGET test_sync_client PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 foreach(target AnyNote test_node_search)
     target_sources(${target} PRIVATE
+        src/AnyNoteClient/ui/MainWindowRealtime.cpp
+        src/AnyNoteClient/storage/RealtimeStore.cpp
+        src/AnyNoteClient/sync/RealtimeSync.cpp
         src/AnyNoteClient/ui/SyncDialogs.cpp
         src/AnyNoteClient/ui/CloudSyncAccount.cpp
         src/AnyNoteClient/ui/CloudSyncOperations.cpp
@@ -291,3 +294,7 @@ list(REMOVE_ITEM SYNC_E2E_SOURCES tests/test_sync_snapshot.cpp)
 add_executable(test_sync_e2e tests/test_sync_e2e.cpp ${SYNC_E2E_SOURCES})
 target_link_libraries(test_sync_e2e PRIVATE anynote_sync_client sqlite3mc::sqlite3mc_static)
 set_property(TARGET test_sync_e2e PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+add_executable(test_realtime_sync tests/test_realtime_sync.cpp ${SYNC_E2E_SOURCES}
+    src/AnyNoteClient/storage/RealtimeStore.cpp src/AnyNoteClient/sync/RealtimeSync.cpp)
+target_link_libraries(test_realtime_sync PRIVATE anynote_sync_client sqlite3mc::sqlite3mc_static)
+set_property(TARGET test_realtime_sync PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

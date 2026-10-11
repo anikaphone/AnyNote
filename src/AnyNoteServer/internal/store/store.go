@@ -65,10 +65,10 @@ func (s *Store) migrate() error {
 	if err := s.DB.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > 1 {
+	if version > 2 {
 		return errors.New("UNSUPPORTED_SCHEMA_VERSION")
 	}
-	if version == 1 {
+	if version == 2 {
 		return nil
 	}
 	tx, err := s.DB.Begin()
@@ -76,7 +76,8 @@ func (s *Store) migrate() error {
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.Exec(`
+	if version == 0 {
+		_, err = tx.Exec(`
  CREATE TABLE accounts(id INTEGER PRIMARY KEY,username TEXT NOT NULL UNIQUE,password_hash BLOB NOT NULL,salt BLOB NOT NULL,
  argon_time INTEGER NOT NULL,argon_memory INTEGER NOT NULL,argon_threads INTEGER NOT NULL,credential_version INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
  CREATE TABLE sessions(token_hash BLOB PRIMARY KEY,account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -91,7 +92,14 @@ func (s *Store) migrate() error {
  CREATE TABLE operations(account_id INTEGER NOT NULL REFERENCES accounts(id),operation_id TEXT NOT NULL,request_hash TEXT NOT NULL,result TEXT NOT NULL,
  completed_at TEXT NOT NULL,PRIMARY KEY(account_id,operation_id));
  PRAGMA user_version=1;`)
-	if err != nil {
+		if err != nil {
+			return err
+		}
+	}
+	if _, err = tx.Exec(realtimeSchema); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`INSERT OR IGNORE INTO sync_changes SELECT n.account_id,n.vault_uid,n.sync_id,v.revision,0 FROM nodes n JOIN vaults v ON v.account_id=n.account_id AND v.uid=n.vault_uid; PRAGMA user_version=2;`); err != nil {
 		return err
 	}
 	return tx.Commit()

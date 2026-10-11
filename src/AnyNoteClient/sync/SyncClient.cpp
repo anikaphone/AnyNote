@@ -18,10 +18,10 @@ Runtime& Curl() { static Runtime runtime; return runtime; }
 using Easy = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
 struct Headers { curl_slist* value = nullptr; ~Headers() { curl_slist_free_all(value); }
     void Add(const std::string& text) { auto next = curl_slist_append(value, text.c_str()); Check(next != nullptr, "OUT_OF_MEMORY"); value = next; } };
-nlohmann::json ControlResponse(std::istream& input) {
+nlohmann::json ControlResponse(std::istream& input, size_t maximum = 32 * 1024 * 1024) {
     std::string data; std::array<char, 16384> buffer{};
     while (input.read(buffer.data(), buffer.size()) || input.gcount()) {
-        Check(data.size() + static_cast<size_t>(input.gcount()) <= 32 * 1024 * 1024, "LIMIT_EXCEEDED"); data.append(buffer.data(), static_cast<size_t>(input.gcount()));
+        Check(data.size() + static_cast<size_t>(input.gcount()) <= maximum, "LIMIT_EXCEEDED"); data.append(buffer.data(), static_cast<size_t>(input.gcount()));
     }
     std::vector<std::set<std::string>> keys;
     auto result = nlohmann::json::parse(data, [&](int depth, nlohmann::json::parse_event_t event, nlohmann::json& value) {
@@ -121,7 +121,7 @@ nlohmann::json SyncClient::Request(const std::string& method, const std::string&
     nlohmann::json result;
     std::function<void(std::ostream&)> upload;
     if (method != "GET") upload = [&](std::ostream& output) { output << body.dump(); };
-    Transfer(method, path, control, upload, [&](std::istream& input) { result = ControlResponse(input); }); return result;
+    Transfer(method, path, control, upload, [&](std::istream& input) { result = ControlResponse(input, (path.ends_with("/sync-manifest") || path.find("/changes?") != std::string::npos) ? Limits{}.maxJsonBytes : 32 * 1024 * 1024); }); return result;
 }
 SnapshotResponse SyncClient::Download(const std::string& path, TransferControl& control) {
     SnapshotResponse result;
@@ -135,6 +135,9 @@ nlohmann::json SyncClient::Upload(const std::string& path, const nlohmann::json&
     }, [&](std::istream& input) { result = ControlResponse(input); }); return result;
 }
 std::wstring DescribeSyncError(const std::string& code) {
+    if (code == "REALTIME_UPGRADE_REQUIRED") return L"请先升级云端服务以支持实时同步。";
+    if (code == "REALTIME_PENDING_OTHER_ACCOUNT") return L"当前笔记库还有其他账户的待确认上传，请切回原账户确认结果。";
+    if (code == "REALTIME_BUSY") return L"正在同步，请稍后处理冲突。";
     if (code == "UNAUTHORIZED") return L"登录已失效，请重新登录。";
     if (code == "VERSION_CONFLICT" || code == "LOCAL_CHANGED") return L"笔记库已发生变化，请重新比较并确认。";
     if (code == "CERTIFICATE_REJECTED") return L"服务器证书验证失败，请检查专用证书、有效期和服务器地址。";

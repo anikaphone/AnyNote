@@ -771,6 +771,7 @@ MainWindow::MainWindow(const std::wstring& iniPath)
 }
 
 MainWindow::~MainWindow() {
+    m_realtime.reset();
     if (m_hStatusFont) {
         DeleteObject(m_hStatusFont);
         m_hStatusFont = nullptr;
@@ -1253,6 +1254,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
         newRepo->CreateDefaultWelcomeNotes();
     }
 
+    StopRealtime();
     m_db = std::move(newDb);
     m_repo = std::move(newRepo);
     m_searchPane.SetRepository(m_repo.get());
@@ -1501,6 +1503,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_TIMER:
+        if (wParam == TIMER_REALTIME) { TickRealtime(); return 0; }
         if (wParam == TIMER_OUTLINE_DEBOUNCE) {
             KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
             UpdateOutline();
@@ -1859,6 +1862,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
 
         WORD cmdId = LOWORD(wParam);
+        if (cmdId == ID_REALTIME_SYNC) { ToggleRealtime(); return 0; }
+        if (cmdId == IDC_REALTIME_STATUS) { ResolveRealtime(); return 0; }
         if (cmdId >= ID_CLOUD_ACCOUNT && cmdId <= ID_CLOUD_MANAGE) { OnCloudCommand(cmdId); return 0; }
         if (cmdId == ID_VIEW_OUTLINE) {
             ToggleOutlinePane();
@@ -2300,6 +2305,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_DESTROY:
+        StopRealtime();
         SaveActiveNote();
         m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
         m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
@@ -2727,6 +2733,16 @@ bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
 
 void MainWindow::OnCloudCommand(int command) {
     if (m_syncBusy || !m_db || !m_db->IsOpen() || !SaveActiveNote()) return;
+    StopRealtime();
+    if (command != 0 && command != ID_CLOUD_ACCOUNT) {
+        try {
+            storage::RealtimeStore state(*m_db);
+            if (state.Load().contains("pending")) {
+                MessageBoxW(m_hWnd,L"上次实时同步的上传结果尚未确认。\n请先开启实时同步确认该操作结果，再进行手动同步。",L"待确认的同步操作",MB_OK|MB_ICONINFORMATION);
+                return;
+            }
+        } catch (const std::exception& error) { SyncError(m_hWnd,error); return; }
+    }
     CancelDragOperation();
     if (!m_cloudSync) m_cloudSync = std::make_unique<CloudSync>(m_hWnd, m_vaultManager,
         [this]() -> storage::Database& { return *m_db; }, [this] {

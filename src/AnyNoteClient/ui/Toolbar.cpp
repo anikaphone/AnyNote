@@ -278,7 +278,7 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
     m_hParent = hParent;
     UINT dpi = GetDpiForWindow(hParent);
 
-    DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | TBSTYLE_CUSTOMERASE |
+    DWORD dwStyle = WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TBSTYLE_FLAT | TBSTYLE_LIST | TBSTYLE_TOOLTIPS | TBSTYLE_CUSTOMERASE |
                     CCS_NODIVIDER | CCS_NORESIZE;
 
     m_hWnd = CreateWindowExW(
@@ -302,7 +302,7 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
     SetWindowSubclass(m_hWnd, ToolbarSubclassProc, 1, 0);
 
     SendMessageW(m_hWnd, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
-    SendMessageW(m_hWnd, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_HIDECLIPPEDBUTTONS | TBSTYLE_EX_DOUBLEBUFFER);
+    SendMessageW(m_hWnd, TB_SETEXTENDEDSTYLE, 0, TBSTYLE_EX_HIDECLIPPEDBUTTONS | TBSTYLE_EX_DOUBLEBUFFER | TBSTYLE_EX_MIXEDBUTTONS);
 
     UpdateImageListForDpi(dpi);
 
@@ -323,7 +323,9 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
         { 8, ID_FILE_SAVE, TBSTATE_ENABLED, BTNS_BUTTON, {0}, 0, -1 },
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
-        { 9, ID_VIEW_OUTLINE, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, -1 }
+        { 9, ID_VIEW_OUTLINE, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, -1 },
+        { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
+        { I_IMAGENONE, ID_REALTIME_SYNC, TBSTATE_ENABLED, BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT, {0}, 0, reinterpret_cast<INT_PTR>(L"实时同步") }
     };
 
     SendMessageW(m_hWnd, TB_ADDBUTTONSW, buttons.size(), reinterpret_cast<LPARAM>(buttons.data()));
@@ -360,7 +362,15 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         SendMessageW(m_hHeadingCombo, CB_SETCURSEL, 0, 0);
     }
 
+    m_hSyncStatus = CreateWindowExW(0, L"STATIC", L"实时同步已关闭", WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_NOTIFY | SS_ENDELLIPSIS,
+        0, 0, 0, 0, hParent, reinterpret_cast<HMENU>(IDC_REALTIME_STATUS), GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), TRUE);
     return true;
+}
+
+void Toolbar::SetRealtimeStatus(bool checked, const std::wstring& text) {
+    SendMessageW(m_hWnd, TB_CHECKBUTTON, ID_REALTIME_SYNC, MAKELONG(checked, 0));
+    SetWindowTextW(m_hSyncStatus, text.c_str());
 }
 
 void Toolbar::UpdateImageListForDpi(UINT dpi) {
@@ -396,6 +406,12 @@ void Toolbar::SetBounds(int x, int y, int width, int height) {
         separator.cx = static_cast<WORD>(MulDiv(96, dpi, 96));
         SendMessageW(m_hWnd, TB_SETBUTTONINFOW, 0, reinterpret_cast<LPARAM>(&separator));
         MoveWindow(m_hWnd, x, y, width, height, TRUE);
+        RECT last = {};
+        SendMessageW(m_hWnd, TB_GETRECT, ID_REALTIME_SYNC, reinterpret_cast<LPARAM>(&last));
+        int statusLeft = last.right + MulDiv(12, dpi, 96);
+        int available = (std::max)(0, width-statusLeft-MulDiv(10,dpi,96));
+        SetWindowPos(m_hSyncStatus, HWND_TOP, x+statusLeft, y, available, height, SWP_NOACTIVATE);
+        SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), TRUE);
 
         // 同步定位 ComboBox
         if (m_hHeadingCombo) {

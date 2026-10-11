@@ -12,6 +12,7 @@
 #include "storage/Database.h"
 #include "storage/NoteRepository.h"
 #include "storage/VaultManager.h"
+#include "sync/RealtimeSync.h"
 #include <memory>
 #include <string>
 
@@ -82,6 +83,14 @@ private:
     void OnOpenExternalVault();
     void OnManageVaults();
     void OnCloudCommand(int command);
+    void ToggleRealtime();
+    void TickRealtime();
+    void ResolveRealtime();
+    void StopRealtime();
+    std::unique_ptr<sync::RealtimeSync> m_realtime;
+    bool m_realtimeRefreshPending = false;
+    bool m_realtimeDialog = false;
+    static constexpr UINT_PTR TIMER_REALTIME = 2002;
     std::unique_ptr<CloudSync> m_cloudSync;
     bool m_syncBusy = false;
 

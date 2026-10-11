@@ -15,7 +15,7 @@ func (s *Server) vault(w http.ResponseWriter, r *http.Request, id, path string, 
 	parts := strings.Split(path, "/")
 	query := r.URL.Query()
 	if path == "capabilities" && r.Method == "GET" {
-		respond(w, id, 200, map[string]any{"protocol_version": 1, "schema_version": 1, "limits": map[string]any{
+		respond(w, id, 200, map[string]any{"protocol_version": 1, "schema_version": 1, "realtime_version": 1, "limits": map[string]any{
 			"nodes": s.Limits.Nodes, "depth": s.Limits.Depth, "node_bytes": s.Limits.NodeBytes, "vault_bytes": s.Limits.VaultBytes,
 			"json_bytes": s.Limits.JSONBytes, "account_vaults": s.Store.AccountVaults, "account_bytes": strconv.FormatInt(s.Store.AccountBytes, 10)}})
 		return nil
@@ -55,6 +55,43 @@ func (s *Server) vault(w http.ResponseWriter, r *http.Request, id, path string, 
 		return store.ErrNotFound
 	}
 	uid := parts[1]
+	if len(parts) == 3 && r.Method == "GET" && (parts[2] == "sync-state" || parts[2] == "sync-manifest") {
+		result, err := s.Store.SyncState(r.Context(), p, uid, parts[2] == "sync-manifest")
+		if err != nil {
+			return err
+		}
+		respond(w, id, 200, result)
+		return nil
+	}
+	if len(parts) == 3 && parts[2] == "changes" && r.Method == "GET" {
+		result, err := s.Store.Changes(r.Context(), p, uid, query.Get("epoch"), query.Get("cursor"))
+		if err != nil {
+			return err
+		}
+		respond(w, id, 200, result)
+		return nil
+	}
+	if len(parts) == 5 && parts[2] == "nodes" && parts[4] == "content" && protocol.UUID(parts[3]) && r.Method == "GET" {
+		result, err := s.Store.ReadOne(r.Context(), p, uid, parts[3], query.Get("epoch"), query.Get("revision"))
+		if err != nil {
+			return err
+		}
+		respond(w, id, 200, result)
+		return nil
+	}
+	if len(parts) == 3 && parts[2] == "sync-batch" && r.Method == "POST" {
+		r.Body = http.MaxBytesReader(w, r.Body, int64(s.Limits.JSONBytes))
+		batch, err := protocol.ReadBatch(r.Body, s.Limits)
+		if err != nil {
+			return err
+		}
+		result, err := s.Store.SyncBatch(r.Context(), p, uid, batch, s.Limits)
+		if err != nil {
+			return err
+		}
+		respond(w, id, 200, result)
+		return nil
+	}
 	root, kind := "", ""
 	if len(parts) == 2 {
 		kind = "delete"

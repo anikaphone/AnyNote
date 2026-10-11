@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -105,7 +106,7 @@ func run() error {
 			_ = json.NewEncoder(w).Encode(map[string]any{"request_id": store.UUID(), "data": map[string]bool{"ok": true}})
 		})
 		mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
-			if (r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE") && dropNext.Swap(false) {
+			if (r.Method == "PUT" || r.Method == "PATCH" || r.Method == "DELETE" || (r.Method == "POST" && strings.HasSuffix(r.URL.Path, "/sync-batch"))) && dropNext.Swap(false) {
 				recorded := httptest.NewRecorder()
 				service.ServeHTTP(recorded, r)
 				if recorded.Code == 200 {

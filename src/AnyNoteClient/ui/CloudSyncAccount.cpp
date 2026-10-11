@@ -5,6 +5,7 @@
 #include "res/resource.h"
 #include <commctrl.h>
 #include <commdlg.h>
+#include <uxtheme.h>
 #include <algorithm>
 
 namespace anynote::ui {
@@ -50,11 +51,12 @@ void CloudSync::AccountTab(HWND dialog) {
     EnableWindow(GetDlgItem(dialog, IDC_SYNC_USER), tab != 2);
     EnableWindow(GetDlgItem(dialog, IDC_SYNC_EXECUTE), tab != 2 || IsLoggedIn());
     SetDlgItemTextW(dialog, IDC_SYNC_EXECUTE, tab == 0 ? L"登录" : tab == 1 ? L"注册" : L"修改密码");
-    SetDlgItemTextW(dialog, IDC_SYNC_PASSWORD_LABEL, tab == 2 ? L"旧密码" : L"密码");
+    SetDlgItemTextW(dialog, IDC_SYNC_PASSWORD_LABEL, tab == 2 ? L"旧密码(&P):" : L"密码(&P):");
     auto status = IsLoggedIn() ? L"已登录：" + utils::Utf8ToWide(m_account) : L"尚未登录；改密仅登录后可用。";
     if (IsLoggedIn() && m_capabilities.contains("limits")) status += L"\r\n单库最多 " + std::to_wstring(m_capabilities.at("limits").at("nodes").get<int>()) + L" 节点，" + std::to_wstring(m_capabilities.at("limits").at("vault_bytes").get<int>() / (1024 * 1024)) + L" MiB。";
     SetDlgItemTextW(dialog, IDC_SYNC_STATUS, status.c_str());
     EnableWindow(GetDlgItem(dialog, IDC_SYNC_LOGOUT), IsLoggedIn());
+    InvalidateRect(dialog, nullptr, TRUE);
 }
 void CloudSync::Authenticate(HWND dialog) {
     int tab = TabCtrl_GetCurSel(GetDlgItem(dialog, IDC_SYNC_TAB));
@@ -100,6 +102,7 @@ INT_PTR CALLBACK CloudSync::AccountProc(HWND dialog, UINT message, WPARAM wParam
     auto* self = reinterpret_cast<CloudSync*>(GetWindowLongPtrW(dialog, DWLP_USER));
     try {
         if (message == WM_INITDIALOG) {
+            EnableThemeDialogTexture(dialog, ETDT_ENABLETAB);
             self = reinterpret_cast<CloudSync*>(lParam); SetWindowLongPtrW(dialog, DWLP_USER, lParam);
             int index = 0; for (const auto* name : {L"登录", L"注册", L"改密"}) { TCITEMW item{}; item.mask = TCIF_TEXT; item.pszText = const_cast<wchar_t*>(name); TabCtrl_InsertItem(GetDlgItem(dialog, IDC_SYNC_TAB), index++, &item); }
             SetDlgItemTextW(dialog, IDC_SYNC_URL, self->m_manager.GetConfigString(L"Sync", L"ServerUrl", L"https://localhost:8443").c_str());
@@ -114,6 +117,11 @@ INT_PTR CALLBACK CloudSync::AccountProc(HWND dialog, UINT message, WPARAM wParam
                 SecureZeroMemory(password.data(), password.size()); SecureZeroMemory(wide.data(), wide.size() * sizeof(wchar_t));
             }
             self->AccountTab(dialog); return TRUE;
+        }
+        if (message == WM_CTLCOLORSTATIC) {
+            HDC hdc = reinterpret_cast<HDC>(wParam);
+            SetBkMode(hdc, TRANSPARENT);
+            return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
         }
         if (!self) return FALSE;
         if (message == WM_NOTIFY && reinterpret_cast<NMHDR*>(lParam)->idFrom == IDC_SYNC_TAB && reinterpret_cast<NMHDR*>(lParam)->code == TCN_SELCHANGE) { self->AccountTab(dialog); return TRUE; }

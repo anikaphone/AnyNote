@@ -63,6 +63,8 @@ func errorStatus(err error) (int, string, bool) {
 		return 404, code, false
 	case "CONFLICT", "VERSION_CONFLICT", "UID_MISMATCH", "OPERATION_ID_REUSED", "OUTSIDE_SUBTREE", "REVISION_EXHAUSTED", "ID_EXHAUSTED":
 		return 409, code, false
+	case "CURSOR_EXPIRED":
+		return 409, code, false
 	case "LIMIT_EXCEEDED", "QUOTA_EXCEEDED":
 		return 413, code, false
 	case "HASH_MISMATCH":

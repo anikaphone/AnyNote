@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <string>
+#include <memory>
 
 namespace anynote::sync {
 struct TransferControl {
@@ -17,6 +18,10 @@ public:
     void ClearToken();
     bool IsLoggedIn() const { return !m_token.empty(); }
     const std::string& BaseUrl() const { return m_baseUrl; }
+    std::unique_ptr<SyncClient> Clone() const {
+        auto client = std::make_unique<SyncClient>(m_baseUrl, m_caFile);
+        client->SetToken(m_token); return client;
+    }
     nlohmann::json Request(const std::string& method, const std::string& path,
         const nlohmann::json& body, TransferControl& control);
     SnapshotResponse Download(const std::string& path, TransferControl& control);
