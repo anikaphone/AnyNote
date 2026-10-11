@@ -70,8 +70,13 @@ void Cancel(const std::function<bool()>& cancelled) {
     Check(!cancelled || !cancelled(), "CANCELLED");
 }
 void Apply(Database& db, const sync::Snapshot& snapshot, int64_t generation,
-    const std::string& operation, const std::string& hash, const std::function<bool()>& cancelled) {
+    const std::string& operation, const std::string& hash, const std::function<bool()>& cancelled, bool replaceUid) {
     Transaction transaction(db, true);
+    if (replaceUid) {
+        Database::Statement identity;
+        Check(identity.Prepare(db, "UPDATE uid SET value=? WHERE singleton=1") && identity.BindText(1, snapshot.uid) &&
+            identity.Step() == SQLITE_DONE, "UID_REPLACE_FAILED");
+    }
     Check(Uid(db) == snapshot.uid, "UID_MISMATCH");
     Check(Generation(db) == generation, "LOCAL_CHANGED");
     std::map<std::string, int64_t> ids;
@@ -188,11 +193,12 @@ VaultSnapshot SnapshotService::Export(Database& db, const std::string& name, con
 }
 
 ImportResult SnapshotService::Import(Database& db, const sync::Snapshot& snapshot, int64_t expectedGeneration,
-    const std::string& operationId, const std::string& password, const sync::Limits& limits, const std::function<bool()>& cancelled) {
+    const std::string& operationId, const std::string& password, const sync::Limits& limits,
+    const std::function<bool()>& cancelled, bool replaceUid) {
     Check(sync::IsUuid(operationId) && expectedGeneration >= 0, "INVALID_IMPORT_REQUEST");
     Cancel(cancelled); Validate(snapshot, limits);
     const auto hash = ImportHash(snapshot, expectedGeneration);
-    Check(Uid(db) == snapshot.uid, "UID_MISMATCH");
+    if (!replaceUid) Check(Uid(db) == snapshot.uid, "UID_MISMATCH");
     if (Applied(db, operationId, hash)) return {true, {}, {}};
     Check(Generation(db) == expectedGeneration, "LOCAL_CHANGED");
     Check(!db.IsEncrypted() || !password.empty(), "PASSWORD_REQUIRED");
@@ -224,11 +230,11 @@ ImportResult SnapshotService::Import(Database& db, const sync::Snapshot& snapsho
     {
         Database rehearsal;
         Check(rehearsal.Open(staging.path.wstring(), password), "STAGING_KEY_FAILED");
-        Apply(rehearsal, snapshot, expectedGeneration, operationId, hash, cancelled);
+        Apply(rehearsal, snapshot, expectedGeneration, operationId, hash, cancelled, replaceUid);
         Verify(rehearsal);
         Check(rehearsal.CheckpointAndClose(), "STAGING_BUSY");
     }
-    Apply(db, snapshot, expectedGeneration, operationId, hash, cancelled);
+    Apply(db, snapshot, expectedGeneration, operationId, hash, cancelled, replaceUid);
     ImportResult result{false, backup, {}};
     // Cleanup failure cannot turn a committed import into an apparent rollback.
     try { Rotate(directory, snapshot.uid, backup); }

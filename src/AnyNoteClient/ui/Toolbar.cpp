@@ -220,12 +220,31 @@ void RenderFluentIcon(Gdiplus::Graphics& g, int iconIndex, int size) {
         g.DrawLine(&mainPen, 9.8f * scale, 11.5f * scale, 13.5f * scale, 11.5f * scale);
         break;
     }
+    case 10: { // 10: Realtime Sync (Fluent 循环同步双箭头)
+        RectF arcRect(2.8f * scale, 2.8f * scale, 10.4f * scale, 10.4f * scale);
+        g.DrawArc(&mainPen, arcRect, 205.0f, 145.0f);
+        PointF arrowTop[] = {
+            { 10.6f * scale, 5.4f * scale },
+            { 13.1f * scale, 7.8f * scale },
+            { 14.4f * scale, 5.0f * scale }
+        };
+        g.DrawLines(&mainPen, arrowTop, 3);
+
+        g.DrawArc(&mainPen, arcRect, 25.0f, 145.0f);
+        PointF arrowBottom[] = {
+            { 5.4f * scale, 10.6f * scale },
+            { 2.9f * scale, 8.2f * scale },
+            { 1.6f * scale, 11.0f * scale }
+        };
+        g.DrawLines(&mainPen, arrowBottom, 3);
+        break;
+    }
     }
 }
 
 HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     int iconSize = MulDiv(kToolbarIconSize, dpi, 96);
-    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 10, 0);
+    HIMAGELIST hImageList = ImageList_Create(iconSize, iconSize, ILC_COLOR32, 11, 0);
     if (!hImageList) return nullptr;
 
     BITMAPINFO bmi = {};
@@ -236,7 +255,7 @@ HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
 
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 11; ++i) {
         void* pBits = nullptr;
         HBITMAP hBmp = CreateDIBSection(nullptr, &bmi, DIB_RGB_COLORS, &pBits, nullptr, 0);
         if (!hBmp) continue;
@@ -254,6 +273,235 @@ HIMAGELIST CreateFluentToolbarImageList(UINT dpi) {
     }
 
     return hImageList;
+}
+
+struct SyncStatusState {
+    bool isHovered = false;
+};
+
+enum class SyncStateKind {
+    Disabled,
+    Syncing,
+    Conflict,
+    Normal
+};
+
+static SyncStateKind ClassifySyncState(const std::wstring& text) {
+    if (text.find(L"已关闭") != std::wstring::npos || text.find(L"未开启") != std::wstring::npos) {
+        return SyncStateKind::Disabled;
+    }
+    if (text.find(L"冲突") != std::wstring::npos || text.find(L"失败") != std::wstring::npos || text.find(L"暂停") != std::wstring::npos) {
+        return SyncStateKind::Conflict;
+    }
+    if (text.find(L"正在") != std::wstring::npos || text.find(L"比较") != std::wstring::npos) {
+        return SyncStateKind::Syncing;
+    }
+    return SyncStateKind::Normal;
+}
+
+static void AddRoundedRect(Gdiplus::GraphicsPath& path, Gdiplus::RectF bounds, float radius) {
+    float diameter = radius * 2.0f;
+    if (diameter > bounds.Width) diameter = bounds.Width;
+    if (diameter > bounds.Height) diameter = bounds.Height;
+
+    float right = bounds.X + bounds.Width;
+    float bottom = bounds.Y + bounds.Height;
+
+    path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(right - diameter, bounds.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddArc(right - diameter, bottom - diameter, diameter, diameter, 0.0f, 90.0f);
+    path.AddArc(bounds.X, bottom - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.CloseFigure();
+}
+
+static LRESULT CALLBACK SyncStatusSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto* pState = reinterpret_cast<SyncStatusState*>(dwRefData);
+
+    switch (uMsg) {
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_SETTEXT: {
+        LRESULT lr = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return lr;
+    }
+
+    case WM_MOUSEMOVE: {
+        if (pState && !pState->isHovered) {
+            pState->isHovered = true;
+            TRACKMOUSEEVENT tme = { sizeof(TRACKMOUSEEVENT), TME_LEAVE, hWnd, 0 };
+            TrackMouseEvent(&tme);
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+
+    case WM_MOUSELEAVE: {
+        if (pState && pState->isHovered) {
+            pState->isHovered = false;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+
+    case WM_SETCURSOR: {
+        wchar_t buf[256] = {};
+        GetWindowTextW(hWnd, buf, 256);
+        auto stateKind = ClassifySyncState(buf);
+        if (stateKind == SyncStateKind::Conflict) {
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_LBUTTONDOWN:
+        return 0;
+
+    case WM_LBUTTONUP: {
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        POINT pt = { static_cast<short>(LOWORD(lParam)), static_cast<short>(HIWORD(lParam)) };
+        if (PtInRect(&rc, pt)) {
+            HWND hParent = GetParent(hWnd);
+            if (hParent) {
+                SendMessageW(hParent, WM_COMMAND, MAKEWPARAM(GetDlgCtrlID(hWnd), STN_CLICKED), reinterpret_cast<LPARAM>(hWnd));
+            }
+        }
+        return 0;
+    }
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hWnd, &ps);
+        RECT rc;
+        GetClientRect(hWnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        if (w > 0 && h > 0) {
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+            HBITMAP oldBmp = static_cast<HBITMAP>(SelectObject(memDC, memBmp));
+
+            // 背景使用与工具栏一致的纯白底色
+            FillRect(memDC, &rc, static_cast<HBRUSH>(GetStockObject(WHITE_BRUSH)));
+
+            wchar_t buf[256] = {};
+            GetWindowTextW(hWnd, buf, 256);
+            std::wstring text = buf;
+            auto stateKind = ClassifySyncState(text);
+            bool isHovered = pState ? pState->isHovered : false;
+
+            UINT dpi = GetDpiForWindow(hWnd);
+            int haloSize = MulDiv(10, dpi, 96);
+            int dotSize = MulDiv(6, dpi, 96);
+            int padX = MulDiv(10, dpi, 96);
+            int dotGap = MulDiv(6, dpi, 96);
+
+            Gdiplus::Color bgClr, borderClr, dotClr, haloClr;
+            COLORREF textClr = RGB(45, 52, 60);
+
+            switch (stateKind) {
+            case SyncStateKind::Conflict:
+                bgClr = isHovered ? Gdiplus::Color(255, 254, 235, 215) : Gdiplus::Color(255, 255, 244, 230);
+                borderClr = isHovered ? Gdiplus::Color(255, 235, 140, 80) : Gdiplus::Color(255, 245, 170, 110);
+                dotClr = Gdiplus::Color(255, 216, 59, 1);
+                haloClr = Gdiplus::Color(65, 216, 59, 1);
+                textClr = RGB(180, 50, 0);
+                break;
+            case SyncStateKind::Syncing:
+                bgClr = isHovered ? Gdiplus::Color(255, 228, 240, 255) : Gdiplus::Color(255, 240, 246, 255);
+                borderClr = isHovered ? Gdiplus::Color(255, 150, 195, 235) : Gdiplus::Color(255, 186, 216, 245);
+                dotClr = Gdiplus::Color(255, 0, 120, 212);
+                haloClr = Gdiplus::Color(65, 0, 120, 212);
+                textClr = RGB(0, 102, 204);
+                break;
+            case SyncStateKind::Disabled:
+                bgClr = isHovered ? Gdiplus::Color(255, 238, 240, 243) : Gdiplus::Color(255, 246, 248, 250);
+                borderClr = isHovered ? Gdiplus::Color(255, 210, 215, 220) : Gdiplus::Color(255, 226, 230, 234);
+                dotClr = Gdiplus::Color(255, 160, 168, 175);
+                haloClr = Gdiplus::Color(45, 160, 168, 175);
+                textClr = RGB(125, 133, 144);
+                break;
+            case SyncStateKind::Normal:
+            default:
+                bgClr = isHovered ? Gdiplus::Color(255, 235, 245, 238) : Gdiplus::Color(255, 244, 249, 245);
+                borderClr = isHovered ? Gdiplus::Color(255, 175, 215, 185) : Gdiplus::Color(255, 205, 230, 212);
+                dotClr = Gdiplus::Color(255, 16, 124, 65);
+                haloClr = Gdiplus::Color(55, 16, 124, 65);
+                textClr = RGB(40, 60, 45);
+                break;
+            }
+
+            {
+                using namespace Gdiplus;
+                Graphics g(memDC);
+                g.SetSmoothingMode(SmoothingModeAntiAlias);
+                g.SetPixelOffsetMode(PixelOffsetModeHalf);
+
+                // 胶囊外框
+                RectF pillBounds(0.5f, 0.5f, static_cast<float>(w) - 1.0f, static_cast<float>(h) - 1.0f);
+                float radius = (static_cast<float>(h) - 1.0f) / 2.0f;
+                GraphicsPath path;
+                AddRoundedRect(path, pillBounds, radius);
+
+                SolidBrush bgBrush(bgClr);
+                g.FillPath(&bgBrush, &path);
+
+                Pen borderPen(borderClr, 1.0f);
+                g.DrawPath(&borderPen, &path);
+
+                // 指示灯圆点与光晕
+                float cx = static_cast<float>(padX) + static_cast<float>(haloSize) / 2.0f;
+                float cy = static_cast<float>(h) / 2.0f;
+
+                SolidBrush haloBrush(haloClr);
+                g.FillEllipse(&haloBrush, cx - haloSize / 2.0f, cy - haloSize / 2.0f,
+                    static_cast<float>(haloSize), static_cast<float>(haloSize));
+
+                SolidBrush dotBrush(dotClr);
+                g.FillEllipse(&dotBrush, cx - dotSize / 2.0f, cy - dotSize / 2.0f,
+                    static_cast<float>(dotSize), static_cast<float>(dotSize));
+            }
+
+            // 绘制文字
+            HFONT hFont = reinterpret_cast<HFONT>(SendMessageW(hWnd, WM_GETFONT, 0, 0));
+            HFONT oldFont = hFont ? static_cast<HFONT>(SelectObject(memDC, hFont)) : nullptr;
+            SetBkMode(memDC, TRANSPARENT);
+            SetTextColor(memDC, textClr);
+
+            RECT textRc;
+            textRc.left = padX + haloSize + dotGap;
+            textRc.top = 0;
+            textRc.right = w - padX;
+            textRc.bottom = h;
+
+            DrawTextW(memDC, text.c_str(), -1, &textRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+            if (oldFont) {
+                SelectObject(memDC, oldFont);
+            }
+
+            BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBmp);
+            DeleteObject(memBmp);
+            DeleteDC(memDC);
+        }
+
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+
+    case WM_NCDESTROY:
+        delete pState;
+        RemoveWindowSubclass(hWnd, SyncStatusSubclassProc, uIdSubclass);
+        break;
+    }
+
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
 } // namespace
@@ -325,7 +573,7 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
         { 9, ID_VIEW_OUTLINE, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, -1 },
         { 0, 0, 0, BTNS_SEP, {0}, 0, -1 },
-        { I_IMAGENONE, ID_REALTIME_SYNC, TBSTATE_ENABLED, BTNS_CHECK | BTNS_AUTOSIZE | BTNS_SHOWTEXT, {0}, 0, reinterpret_cast<INT_PTR>(L"实时同步") }
+        { 10, ID_REALTIME_SYNC, TBSTATE_ENABLED, BTNS_CHECK, {0}, 0, -1 }
     };
 
     SendMessageW(m_hWnd, TB_ADDBUTTONSW, buttons.size(), reinterpret_cast<LPARAM>(buttons.data()));
@@ -362,15 +610,35 @@ bool Toolbar::Initialize(HWND hParent, UINT controlId) {
         SendMessageW(m_hHeadingCombo, CB_SETCURSEL, 0, 0);
     }
 
-    m_hSyncStatus = CreateWindowExW(0, L"STATIC", L"实时同步已关闭", WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_NOTIFY | SS_ENDELLIPSIS,
+    m_hSyncStatus = CreateWindowExW(0, L"STATIC", L"实时同步已关闭", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_NOTIFY,
         0, 0, 0, 0, hParent, reinterpret_cast<HMENU>(IDC_REALTIME_STATUS), GetModuleHandleW(nullptr), nullptr);
-    SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), TRUE);
+    if (m_hSyncStatus) {
+        auto* pState = new SyncStatusState();
+        SetWindowSubclass(m_hSyncStatus, SyncStatusSubclassProc, 2, reinterpret_cast<DWORD_PTR>(pState));
+        SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), TRUE);
+    }
     return true;
 }
 
 void Toolbar::SetRealtimeStatus(bool checked, const std::wstring& text) {
-    SendMessageW(m_hWnd, TB_CHECKBUTTON, ID_REALTIME_SYNC, MAKELONG(checked, 0));
-    SetWindowTextW(m_hSyncStatus, text.c_str());
+    if (m_realtimeChecked == checked && m_syncStatusText == text) {
+        return;
+    }
+
+    if (m_realtimeChecked != checked) {
+        m_realtimeChecked = checked;
+        if (m_hWnd) {
+            SendMessageW(m_hWnd, TB_CHECKBUTTON, ID_REALTIME_SYNC, MAKELONG(checked ? TRUE : FALSE, 0));
+        }
+    }
+
+    if (m_syncStatusText != text) {
+        m_syncStatusText = text;
+        if (m_hSyncStatus) {
+            SetWindowTextW(m_hSyncStatus, text.c_str());
+            LayoutSyncStatus();
+        }
+    }
 }
 
 void Toolbar::UpdateImageListForDpi(UINT dpi) {
@@ -397,6 +665,11 @@ void Toolbar::UpdateImageListForDpi(UINT dpi) {
 
 void Toolbar::SetBounds(int x, int y, int width, int height) {
     if (m_hWnd) {
+        m_lastX = x;
+        m_lastY = y;
+        m_lastWidth = width;
+        m_lastHeight = height;
+
         UINT dpi = GetDpiForWindow(m_hParent);
         UpdateFontForDpi(dpi);
         UpdateImageListForDpi(dpi);
@@ -406,12 +679,8 @@ void Toolbar::SetBounds(int x, int y, int width, int height) {
         separator.cx = static_cast<WORD>(MulDiv(96, dpi, 96));
         SendMessageW(m_hWnd, TB_SETBUTTONINFOW, 0, reinterpret_cast<LPARAM>(&separator));
         MoveWindow(m_hWnd, x, y, width, height, TRUE);
-        RECT last = {};
-        SendMessageW(m_hWnd, TB_GETRECT, ID_REALTIME_SYNC, reinterpret_cast<LPARAM>(&last));
-        int statusLeft = last.right + MulDiv(12, dpi, 96);
-        int available = (std::max)(0, width-statusLeft-MulDiv(10,dpi,96));
-        SetWindowPos(m_hSyncStatus, HWND_TOP, x+statusLeft, y, available, height, SWP_NOACTIVATE);
-        SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(m_hFont), TRUE);
+
+        LayoutSyncStatus();
 
         // 同步定位 ComboBox
         if (m_hHeadingCombo) {
@@ -432,8 +701,66 @@ void Toolbar::SetBounds(int x, int y, int width, int height) {
     }
 }
 
+void Toolbar::LayoutSyncStatus() {
+    if (!m_hSyncStatus || !m_hWnd) return;
+
+    UINT dpi = GetDpiForWindow(m_hParent);
+    UpdateFontForDpi(dpi);
+
+    // 获取实时同步按钮右边界，避免挤压重叠
+    RECT last = {};
+    SendMessageW(m_hWnd, TB_GETRECT, ID_REALTIME_SYNC, reinterpret_cast<LPARAM>(&last));
+    int statusLeft = last.right + MulDiv(12, dpi, 96);
+
+    wchar_t buf[256] = {};
+    GetWindowTextW(m_hSyncStatus, buf, 256);
+    std::wstring text = buf;
+
+    int textWidth = 0;
+    HDC hdc = GetDC(m_hSyncStatus);
+    if (hdc) {
+        HFONT oldFont = m_hFont ? static_cast<HFONT>(SelectObject(hdc, m_hFont)) : nullptr;
+        RECT calcRc = {};
+        DrawTextW(hdc, text.c_str(), -1, &calcRc, DT_CALCRECT | DT_SINGLELINE);
+        textWidth = calcRc.right - calcRc.left;
+        if (oldFont) {
+            SelectObject(hdc, oldFont);
+        }
+        ReleaseDC(m_hSyncStatus, hdc);
+    }
+
+    int haloSize = MulDiv(10, dpi, 96);
+    int dotGap = MulDiv(6, dpi, 96);
+    int padX = MulDiv(10, dpi, 96);
+    int pillW = padX * 2 + haloSize + dotGap + textWidth;
+    int pillH = MulDiv(22, dpi, 96);
+    int rightMargin = MulDiv(12, dpi, 96);
+
+    int pillX = m_lastX + m_lastWidth - rightMargin - pillW;
+    int minX = m_lastX + statusLeft;
+
+    if (pillX < minX) {
+        pillX = minX;
+        pillW = (std::max)(0, (m_lastX + m_lastWidth - rightMargin) - minX);
+    }
+
+    int pillY = m_lastY + (m_lastHeight - pillH) / 2;
+
+    RECT curRc = {};
+    GetWindowRect(m_hSyncStatus, &curRc);
+    POINT pt = { curRc.left, curRc.top };
+    ScreenToClient(m_hParent, &pt);
+    int curW = curRc.right - curRc.left;
+    int curH = curRc.bottom - curRc.top;
+
+    if (pt.x != pillX || pt.y != pillY || curW != pillW || curH != pillH) {
+        SetWindowPos(m_hSyncStatus, HWND_TOP, pillX, pillY, pillW, pillH, SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    }
+    InvalidateRect(m_hSyncStatus, nullptr, FALSE);
+}
+
 void Toolbar::UpdateFontForDpi(UINT dpi) {
-    if (!m_hHeadingCombo || (m_hFont && m_fontDpi == dpi)) return;
+    if (m_hFont && m_fontDpi == dpi) return;
 
     HFONT newFont = CreateFontW(
         -MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -442,7 +769,12 @@ void Toolbar::UpdateFontForDpi(UINT dpi) {
     );
     if (!newFont) return;
 
-    SendMessageW(m_hHeadingCombo, WM_SETFONT, reinterpret_cast<WPARAM>(newFont), TRUE);
+    if (m_hHeadingCombo) {
+        SendMessageW(m_hHeadingCombo, WM_SETFONT, reinterpret_cast<WPARAM>(newFont), TRUE);
+    }
+    if (m_hSyncStatus) {
+        SendMessageW(m_hSyncStatus, WM_SETFONT, reinterpret_cast<WPARAM>(newFont), TRUE);
+    }
     if (m_hFont) DeleteObject(m_hFont);
     m_hFont = newFont;
     m_fontDpi = dpi;

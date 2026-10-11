@@ -19,6 +19,7 @@ void MainWindow::ToggleRealtime()
     if (m_realtime && (m_realtime->Active() || m_realtime->Checking()))
     {
         StopRealtime();
+        if (m_repo) m_vaultManager.SetConfigString(L"RealtimeSync", utils::Utf8ToWide(m_repo->GetVaultUid()), L"0");
         return;
     }
     m_toolbar.SetRealtimeStatus(false, L"实时同步未开启");
@@ -36,15 +37,27 @@ void MainWindow::ToggleRealtime()
         m_realtime->Enable();
         SetTimer(m_hWnd, TIMER_REALTIME, 250, nullptr);
         m_toolbar.SetRealtimeStatus(false, m_realtime->Status());
+        m_vaultManager.SetConfigString(L"RealtimeSync", utils::Utf8ToWide(m_repo->GetVaultUid()), L"1");
     }
     catch (const std::exception &e)
     {
         SyncError(m_hWnd, e);
     }
 }
+void MainWindow::RestoreRealtimeIfEnabled()
+{
+    if (!m_repo || !m_cloudSync || !m_cloudSync->IsLoggedIn()) return;
+    const auto enabled = m_vaultManager.GetConfigString(L"RealtimeSync", utils::Utf8ToWide(m_repo->GetVaultUid()), L"0");
+    if (enabled != L"1" || m_realtime) return;
+    ToggleRealtime();
+}
 void MainWindow::TickRealtime()
 {
     if (!m_realtime || m_realtimeDialog || m_syncBusy || m_isDragging)
+        return;
+    // IME composition is transient editor state. Do not serialize or apply
+    // remote changes while the user is choosing a candidate word.
+    if (IsImeComposing())
         return;
     std::string protectedId;
     bool dirty = false;

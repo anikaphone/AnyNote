@@ -15,6 +15,8 @@
 #include "sync/RealtimeSync.h"
 #include <memory>
 #include <string>
+#include <unordered_set>
+#include <unordered_map>
 
 namespace anynote::ui {
 class CloudSync;
@@ -51,6 +53,12 @@ private:
 
     bool OpenNotebook(const std::wstring& filePath, const std::string& password = "", bool createWelcomeIfEmpty = false);
     void PopulateTreeViewFromDb(int64_t selectNodeId = 0);
+    void LoadExpandedNodeState();
+    void SaveExpandedNodeState();
+    void RestoreExpandedNodeState(const std::unordered_map<int64_t, HTREEITEM>& idToItem);
+    int64_t LoadLastNoteId() const;
+    void SaveLastNoteId(int64_t nodeId);
+    bool IsImeComposing() const;
     bool SelectNodeById(int64_t nodeId);
     bool SaveActiveNote();
     void LoadNoteForId(int64_t nodeId);
@@ -84,6 +92,7 @@ private:
     void OnManageVaults();
     void OnCloudCommand(int command);
     void ToggleRealtime();
+    void RestoreRealtimeIfEnabled();
     void TickRealtime();
     void ResolveRealtime();
     void StopRealtime();
@@ -118,6 +127,8 @@ private:
     std::string m_loadedEditorHash;
     std::wstring m_currentNotebookPath;
     bool m_revertingTreeSelection = false;
+    std::unordered_set<int64_t> m_expandedNodeIds;
+    bool m_restoringTree = false;
 
     // 目录树拖拽重排与移动状态
     bool m_isDragging = false;
@@ -138,6 +149,9 @@ private:
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
     static constexpr UINT_PTR TIMER_OUTLINE_DEBOUNCE = 2001;
+    static constexpr UINT_PTR TIMER_AUTOSAVE_DEBOUNCE = 2003;
+    static constexpr UINT AUTOSAVE_DEBOUNCE_MS = 5000;
+    bool m_editorDirty = false;
 };
 
 } // namespace anynote::ui

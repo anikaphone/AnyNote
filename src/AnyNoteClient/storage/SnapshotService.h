@@ -21,6 +21,6 @@ public:
     static VaultSnapshot Export(Database& db, const std::string& name, const sync::Limits& limits = {});
     static ImportResult Import(Database& db, const sync::Snapshot& snapshot, int64_t expectedGeneration,
         const std::string& operationId, const std::string& password = "", const sync::Limits& limits = {},
-        const std::function<bool()>& cancelled = {});
+        const std::function<bool()>& cancelled = {}, bool replaceUid = false);
 };
 }

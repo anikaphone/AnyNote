@@ -87,7 +87,14 @@ void RealtimeSync::Enable()
     if (m_state.contains("pending"))
         LaunchUpload();
     else
-        Launch(true);
+    {
+        // A persisted base/remote/vault triple is a trusted synchronization
+        // baseline. Resume through the normal three-way comparison so changes
+        // made while this device was offline can be pulled or pushed.
+        const bool hasBaseline = m_state.contains("base") && m_state.contains("remote") &&
+                                 m_state.contains("vault") && m_state.value("binding", "") == m_binding;
+        Launch(!hasBaseline);
+    }
 }
 Json RealtimeSync::Compare(const Json &base, const Json &local, const Json &remote)
 {

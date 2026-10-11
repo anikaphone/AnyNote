@@ -141,12 +141,23 @@ sync::Snapshot CloudSync::LocalSnapshot(HWND owner, const std::string& uid) {
 void CloudSync::DownloadVault(HWND owner, const nlohmann::json& vault, const std::optional<std::string>& root) {
     const std::string uid = vault.at("uid");
     auto path = ChooseLocal(owner, uid);
+    bool replaceDefault = false;
+    if (path.empty() && !root) {
+        const auto sameName = m_manager.GenerateNewVaultPath(utils::Utf8ToWide(vault.at("name")));
+        if (std::filesystem::exists(sameName)) {
+            path = sameName;
+            replaceDefault = true;
+            if (MessageBoxW(owner, (L"本地已存在“" + std::filesystem::path(path).filename().wstring() +
+                L"”。继续下载将直接覆盖本地内容，且不创建备份。是否继续？").c_str(),
+                L"覆盖本地笔记库", MB_OKCANCEL | MB_ICONWARNING) != IDOK) throw std::runtime_error("CANCELLED");
+        }
+    }
     storage::Database other; Secret password;
     storage::Database* target = nullptr; storage::VaultSnapshot local{{uid, "", {}}, 0};
     if (!path.empty()) {
         target = &m_database();
         if (_wcsicmp(path.c_str(), target->GetFilePath().c_str()) != 0) { OpenVault(owner, other, path, password); target = &other; }
-        if (storage::NoteRepository(*target).GetVaultUid() != uid) throw std::runtime_error("UID_MISMATCH");
+        if (storage::NoteRepository(*target).GetVaultUid() != uid && !replaceDefault) throw std::runtime_error("UID_MISMATCH");
         if (target->IsEncrypted() && password.value.empty()) {
             ReadPassword(owner, password, L"输入现有笔记库密码以验证加密备份");
             storage::Database verify; if (!verify.Open(path, password.value)) throw std::runtime_error(verify.GetLastError());
@@ -171,16 +182,18 @@ void CloudSync::DownloadVault(HWND owner, const nlohmann::json& vault, const std
             if (password.value.empty() || password.value != confirm.value) throw std::runtime_error("PASSWORD_CONFIRMATION_MISMATCH");
         }
     }
-    RequireConfirm(owner, L"本地目标：" + path + L"\r\n\r\n" + Impact(local.snapshot, incoming) + L"\r\n即将按远端内容替换此范围。", L"下载影响预览");
-    RequireConfirm(owner, L"再次确认：下载将覆盖所示范围的本地笔记。已有库会先建立备份，并保留当前加密密码。", L"确认下载覆盖");
+    if (!replaceDefault) RequireConfirm(owner, L"本地目标：" + path + L"\r\n\r\n" + Impact(local.snapshot, incoming) + L"\r\n即将按远端内容替换此范围。", L"下载影响预览");
+    if (!replaceDefault) RequireConfirm(owner, L"再次确认：下载将覆盖所示范围的本地笔记。", L"确认下载覆盖");
     bool committed = false; std::filesystem::path journal;
     RunSyncTask(owner, L"备份并事务导入", [&](sync::TransferControl& control) {
         m_coordinator.SetState(sync::SyncState::Committing);
-        if (target) { storage::SnapshotService::Import(*target, incoming, local.generation, common::NewUuid(), password.value, {}, [&] { return control.cancelled.load(); }); }
+        if (target) storage::SnapshotService::Import(*target, incoming, local.generation, common::NewUuid(), password.value, {},
+            [&] { return control.cancelled.load(); }, replaceDefault);
         else { if (control.cancelled) throw std::runtime_error("CANCELLED"); journal = storage::VaultInstaller::Install(m_manager, incoming, path, utils::Utf8ToWide(vault.at("name")), password.value); }
         committed = true;
     });
     if (committed) {
+        if (replaceDefault) m_manager.AddVault(utils::Utf8ToWide(vault.at("name")), path, uid);
         try { RememberVersion(uid, vault); }
         catch (const std::exception&) { MessageBoxW(owner, L"本地数据已提交，但绑定状态保存失败。下次上传需要重新确认绑定。", L"下载已提交", MB_OK | MB_ICONWARNING); }
         m_coordinator.SetState(sync::SyncState::Refreshing);

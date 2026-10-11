@@ -14,6 +14,7 @@ public:
     bool Initialize(HWND hParent, UINT controlId);
     HWND GetHwnd() const noexcept { return m_hWnd; }
     HWND GetHeadingComboHwnd() const noexcept { return m_hHeadingCombo; }
+    HWND GetSyncStatusHwnd() const noexcept { return m_hSyncStatus; }
 
     void SetBounds(int x, int y, int width, int height);
     int GetPreferredHeight() const;
@@ -34,6 +35,15 @@ private:
     HIMAGELIST m_hImageList = nullptr;
     UINT m_imageDpi = 0;
 
+    int m_lastX = 0;
+    int m_lastY = 0;
+    int m_lastWidth = 0;
+    int m_lastHeight = 0;
+
+    bool m_realtimeChecked = false;
+    std::wstring m_syncStatusText;
+
+    void LayoutSyncStatus();
     void UpdateFontForDpi(UINT dpi);
     void UpdateImageListForDpi(UINT dpi);
 };

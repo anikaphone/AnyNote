@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include <imm.h>
+#pragma comment(lib, "imm32.lib")
 #include "CloudSync.h"
 #include "resource.h"
 #include "common/StringUtils.h"
@@ -1272,7 +1274,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
     SetWindowTextW(m_hWnd, title.c_str());
 
     UpdateEncryptionStatusUI();
-    PopulateTreeViewFromDb();
+    PopulateTreeViewFromDb(LoadLastNoteId());
     // Reapply the node filter after rebuilding the tree for a different vault.
     // The search bar belongs to the main window and keeps its query while the
     // notebook contents are replaced.
@@ -1283,6 +1285,7 @@ bool MainWindow::OpenNotebook(const std::wstring& filePath, const std::string& p
         }
     }
     UpdateVaultBarUI();
+    RestoreRealtimeIfEnabled();
 
     return true;
 }
@@ -1312,6 +1315,7 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
     if (m_activeNoteId > 0 && !SaveActiveNote()) {
         return;
     }
+    LoadExpandedNodeState();
     m_treeView.ClearAll();
     m_activeNoteId = 0;
     if (!m_repo) return;
@@ -1333,13 +1337,13 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
         std::vector<storage::NoteNode> nextRemaining;
         for (auto& node : remaining) {
             if (node.parentId == 0) {
-                HTREEITEM hItem = m_treeView.InsertNode(nullptr, node.title, static_cast<LPARAM>(node.id), true);
+                HTREEITEM hItem = m_treeView.InsertNode(nullptr, node.title, static_cast<LPARAM>(node.id));
                 idToItem[node.id] = hItem;
                 insertedAny = true;
             } else {
                 auto it = idToItem.find(node.parentId);
                 if (it != idToItem.end()) {
-                    HTREEITEM hItem = m_treeView.InsertNode(it->second, node.title, static_cast<LPARAM>(node.id), true);
+                    HTREEITEM hItem = m_treeView.InsertNode(it->second, node.title, static_cast<LPARAM>(node.id));
                     idToItem[node.id] = hItem;
                     insertedAny = true;
                 } else {
@@ -1352,7 +1356,7 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
 
     // 孤儿节点（父节点不存在）安全挂在根目录下展示
     for (const auto& orphan : remaining) {
-        HTREEITEM hItem = m_treeView.InsertNode(nullptr, orphan.title, static_cast<LPARAM>(orphan.id), true);
+        HTREEITEM hItem = m_treeView.InsertNode(nullptr, orphan.title, static_cast<LPARAM>(orphan.id));
         idToItem[orphan.id] = hItem;
     }
 
@@ -1372,6 +1376,7 @@ void MainWindow::PopulateTreeViewFromDb(int64_t selectNodeId) {
         m_treeView.SelectItem(hToSelect);
         m_treeView.EnsureVisible(hToSelect);
     }
+    RestoreExpandedNodeState(idToItem);
 }
 
 bool MainWindow::SaveActiveNote() {
@@ -1392,11 +1397,12 @@ bool MainWindow::SaveActiveNote() {
     // representation, not the raw stored bytes, so merely opening sync preserves
     // the original hash/time. WM_SETTEXT resets EM_GETMODIFY, so it is not enough.
     const auto editorHash = sync::Sha256(*rtfOpt);
-    if (!m_loadedEditorHash.empty() && editorHash == m_loadedEditorHash) return true;
+    if (!m_loadedEditorHash.empty() && editorHash == m_loadedEditorHash) { m_editorDirty = false; return true; }
     // Focus/layout/undo changes can alter RichEdit's serialized representation
     // relative to the initial load without changing the already stored bytes.
     if (*rtfOpt == m_repo->GetNoteContent(m_activeNoteId)) {
         m_loadedEditorHash = editorHash;
+        m_editorDirty = false;
         return true;
     }
     std::wstring plainText = m_richEditView.GetPlainText();
@@ -1408,6 +1414,7 @@ bool MainWindow::SaveActiveNote() {
         return false;
     }
     SendMessageW(m_richEditView.GetHwnd(), EM_SETMODIFY, FALSE, 0);
+    m_editorDirty = false;
     m_loadedEditorHash = editorHash;
 
     if (m_hStatusBar) {
@@ -1428,10 +1435,22 @@ void MainWindow::LoadNoteForId(int64_t nodeId) {
         m_richEditView.SetText(L"");
     }
     KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
+    KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
+    m_editorDirty = false;
     UpdateOutline();
     SendMessageW(m_richEditView.GetHwnd(), EM_SETMODIFY, FALSE, 0);
     const auto normalized = m_richEditView.StreamOutRTF();
     m_loadedEditorHash = normalized ? sync::Sha256(*normalized) : "";
+}
+
+bool MainWindow::IsImeComposing() const {
+    const HWND edit = m_richEditView.GetHwnd();
+    if (!edit || !IsWindow(edit)) return false;
+    HIMC context = ImmGetContext(edit);
+    if (!context) return false;
+    const LONG bytes = ImmGetCompositionStringW(context, GCS_COMPSTR, nullptr, 0);
+    ImmReleaseContext(edit, context);
+    return bytes > 0;
 }
 
 void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
@@ -1482,6 +1501,7 @@ void MainWindow::OnTreeSelectionChanged(NMTREEVIEWW* pNmtv) {
 
     m_activeNoteId = newId;
     LoadNoteForId(newId);
+    SaveLastNoteId(newId);
 }
 
 LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
@@ -1504,6 +1524,17 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
 
     case WM_TIMER:
         if (wParam == TIMER_REALTIME) { TickRealtime(); return 0; }
+        if (wParam == TIMER_AUTOSAVE_DEBOUNCE) {
+            KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
+            if (m_editorDirty && m_activeNoteId > 0 && !m_syncBusy) {
+                if (IsImeComposing()) {
+                    SetTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE, AUTOSAVE_DEBOUNCE_MS, nullptr);
+                } else {
+                    SaveActiveNote();
+                }
+            }
+            return 0;
+        }
         if (wParam == TIMER_OUTLINE_DEBOUNCE) {
             KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
             UpdateOutline();
@@ -1702,6 +1733,15 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         }
         break;
 
+    case WM_CTLCOLORSTATIC: {
+        HWND hCtrl = reinterpret_cast<HWND>(lParam);
+        if (hCtrl == m_toolbar.GetSyncStatusHwnd()) {
+            SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+            return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
+        }
+        break;
+    }
+
     case WM_NOTIFY: {
         auto* pNmhdr = reinterpret_cast<NMHDR*>(lParam);
         if (pNmhdr && pNmhdr->hwndFrom == m_toolbar.GetHwnd() && pNmhdr->code == NM_CUSTOMDRAW) {
@@ -1728,6 +1768,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 case ID_INSERT_TABLE:       tipText = L"插入表格 (Ctrl+Shift+T)"; break;
                 case ID_FILE_SAVE:          tipText = L"保存笔记 (Ctrl+S)"; break;
                 case ID_VIEW_OUTLINE:       tipText = L"大纲目录 (Ctrl+Shift+O)"; break;
+                case ID_REALTIME_SYNC:      tipText = L"实时同步 (点击开启/关闭)"; break;
                 default: break;
                 }
                 if (tipText) {
@@ -1762,6 +1803,17 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 }
             } else if (pNmhdr->code == TVN_SELCHANGEDW) {
                 OnTreeSelectionChanged(reinterpret_cast<NMTREEVIEWW*>(lParam));
+                return 0;
+            } else if (pNmhdr->code == TVN_ITEMEXPANDEDW) {
+                if (!m_restoringTree && !m_isFilteringTree) {
+                    auto* pNmtv = reinterpret_cast<NMTREEVIEWW*>(lParam);
+                    const auto id = static_cast<int64_t>(pNmtv->itemNew.lParam);
+                    if (id > 0) {
+                        if (pNmtv->action == TVE_EXPAND) m_expandedNodeIds.insert(id);
+                        else if (pNmtv->action == TVE_COLLAPSE) m_expandedNodeIds.erase(id);
+                        SaveExpandedNodeState();
+                    }
+                }
                 return 0;
             } else if (pNmhdr->code == TVN_BEGINDRAGW) {
                 if (m_isNodeSearchVisible && !m_nodeSearchBar.GetKeyword().empty()) {
@@ -1854,6 +1906,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_COMMAND: {
+        if (LOWORD(wParam) == IDC_MAIN_RICHEDIT && HIWORD(wParam) == EN_CHANGE) {
+            if (m_activeNoteId > 0 && !m_syncBusy) {
+                m_editorDirty = true;
+                KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
+                SetTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE, AUTOSAVE_DEBOUNCE_MS, nullptr);
+            }
+            return 0;
+        }
         if (LOWORD(wParam) == IDC_MAIN_RICHEDIT && HIWORD(wParam) == EN_KILLFOCUS) {
             if (m_isOutlineVisible) {
                 UpdateOutline();
@@ -2300,6 +2360,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_CLOSE:
+        KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
         if (!SaveActiveNote()) return 0;
         DestroyWindow(m_hWnd);
         return 0;
@@ -2311,6 +2372,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
         m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", m_isAlwaysOnTop ? L"1" : L"0");
         KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
+        KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
         if (m_db) {
             m_db->Close();
         }
@@ -2700,6 +2762,7 @@ void MainWindow::OnManageVaults() {
 
 bool MainWindow::SwitchToVault(const std::wstring& path, bool createIfMissing) {
     if (m_syncBusy) return false;
+    SaveExpandedNodeState();
     if (_wcsicmp(path.c_str(), m_currentNotebookPath.c_str()) == 0) {
         if (!m_vaultManager.SetActiveVaultPath(path)) return false;
         UpdateVaultBarUI();
@@ -2758,9 +2821,16 @@ void MainWindow::OnCloudCommand(int command) {
             m_syncBusy = true;
         });
     m_syncBusy = true;
-    try { if (command == 0) m_cloudSync->AutoLogin(); else m_cloudSync->Command(command); }
+    try {
+        if (command == 0) {
+            m_cloudSync->AutoLogin();
+        } else {
+            m_cloudSync->Command(command);
+        }
+    }
     catch (const std::exception& error) { SyncError(m_hWnd, error); }
     m_syncBusy = false;
+    RestoreRealtimeIfEnabled();
     UpdateVaultBarUI();
 }
 
@@ -2949,6 +3019,54 @@ void MainWindow::FilterTreeNodes(const std::wstring& keyword) {
     m_isFilteringTree = false;
     SendMessageW(hTree, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hTree, nullptr, TRUE);
+}
+
+void MainWindow::LoadExpandedNodeState() {
+    m_expandedNodeIds.clear();
+    if (!m_repo) return;
+    const auto uid = m_repo->GetVaultUid();
+    const auto value = m_vaultManager.GetConfigString(L"TreeView", utils::Utf8ToWide(uid));
+    size_t start = 0;
+    while (start < value.size()) {
+        const auto end = value.find(L',', start);
+        const auto token = value.substr(start, end == std::wstring::npos ? end : end - start);
+        try { if (!token.empty()) m_expandedNodeIds.insert(std::stoll(token)); } catch (...) {}
+        if (end == std::wstring::npos) break;
+        start = end + 1;
+    }
+}
+
+void MainWindow::SaveExpandedNodeState() {
+    if (!m_repo) return;
+    std::vector<int64_t> ids(m_expandedNodeIds.begin(), m_expandedNodeIds.end());
+    std::sort(ids.begin(), ids.end());
+    std::wstring value;
+    for (auto id : ids) { if (!value.empty()) value += L','; value += std::to_wstring(id); }
+    m_vaultManager.SetConfigString(L"TreeView", utils::Utf8ToWide(m_repo->GetVaultUid()), value);
+}
+
+int64_t MainWindow::LoadLastNoteId() const {
+    if (!m_repo) return 0;
+    const auto value = m_vaultManager.GetConfigString(L"LastNote", utils::Utf8ToWide(m_repo->GetVaultUid()));
+    try { return value.empty() ? 0 : std::stoll(value); } catch (...) { return 0; }
+}
+
+void MainWindow::SaveLastNoteId(int64_t nodeId) {
+    if (!m_repo || nodeId <= 0) return;
+    m_vaultManager.SetConfigString(L"LastNote", utils::Utf8ToWide(m_repo->GetVaultUid()), std::to_wstring(nodeId));
+}
+
+void MainWindow::RestoreExpandedNodeState(const std::unordered_map<int64_t, HTREEITEM>& idToItem) {
+    std::unordered_set<int64_t> valid;
+    m_restoringTree = true;
+    for (const auto& [id, item] : idToItem) {
+        if (m_expandedNodeIds.count(id)) {
+            TreeView_Expand(m_treeView.GetHwnd(), item, TVE_EXPAND);
+            valid.insert(id);
+        }
+    }
+    m_restoringTree = false;
+    if (valid.size() != m_expandedNodeIds.size()) { m_expandedNodeIds = std::move(valid); SaveExpandedNodeState(); }
 }
 
 void MainWindow::ShowOutlinePane(bool show) {
