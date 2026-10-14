@@ -45,6 +45,10 @@ public:
 
     void SetBounds(int x, int y, int width, int height, bool repaint = true);
 
+    // 自动换行
+    void SetWordWrap(bool enable);
+    bool IsWordWrap() const noexcept { return m_wordWrap; }
+
     // 文本与 RTF 流导入导出
     void SetText(const std::wstring& text);
     std::wstring GetText() const;
@@ -152,6 +156,7 @@ private:
     unsigned long long m_layoutRefreshCount = 0;
     unsigned long long m_layoutAppliedCount = 0;
     long m_codeBlockCount = 0;
+    bool m_wordWrap = true;
 };
 
 } // namespace anynote::ui

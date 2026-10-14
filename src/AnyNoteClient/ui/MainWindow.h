@@ -85,6 +85,10 @@ private:
     void ToggleAlwaysOnTop();
     void SetAlwaysOnTop(bool enable);
 
+    // 自动换行相关操作
+    void ToggleWordWrap();
+    void SetWordWrap(bool enable);
+
     // 多笔记本库相关操作
     void UpdateVaultBarUI();
     void OnNewVault();
@@ -146,6 +150,7 @@ private:
     bool m_isFilteringTree = false;     // 是否正在执行树节点过滤
     bool m_isUpdatingOutline = false;   // 是否正在更新大纲
     bool m_isAlwaysOnTop = false;       // 窗口是否置顶
+    bool m_isWordWrap = true;           // 编辑器是否自动换行
 
     common::CodeLanguage m_lastCodeLanguage = common::CodeLanguage::PlainText;
     static constexpr UINT_PTR TIMER_OUTLINE_DEBOUNCE = 2001;

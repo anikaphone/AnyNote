@@ -116,6 +116,7 @@
 // Help Commands
 #define ID_HELP_ABOUT           1501
 #define ID_HELP_ALWAYS_ON_TOP   1502
+#define ID_HELP_WORD_WRAP       1503
 
 // UI Child IDs
 #define IDC_MAIN_TOOLBAR        2001

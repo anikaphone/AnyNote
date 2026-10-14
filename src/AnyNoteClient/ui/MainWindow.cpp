@@ -1031,6 +1031,11 @@ bool MainWindow::Initialize(HINSTANCE hInstance, int nCmdShow) {
     if (hMenu) {
         CheckMenuItem(hMenu, ID_HELP_ALWAYS_ON_TOP, m_isAlwaysOnTop ? MF_CHECKED : MF_UNCHECKED);
     }
+    m_isWordWrap = (m_vaultManager.GetConfigString(L"Editor", L"WordWrap", L"1") != L"0");
+    m_richEditView.SetWordWrap(m_isWordWrap);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_HELP_WORD_WRAP, m_isWordWrap ? MF_CHECKED : MF_UNCHECKED);
+    }
     m_lastCodeLanguage = LoadLastCodeLanguage();
     bool shouldAddWelcomeNotes = m_vaultManager.IsFirstTimeCreation();
     std::wstring activePath = m_vaultManager.GetActiveVaultPath();
@@ -1935,6 +1940,11 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
+        if (cmdId == ID_HELP_WORD_WRAP) {
+            ToggleWordWrap();
+            return 0;
+        }
+
         if (cmdId >= ID_VAULT_SWITCH_BASE && cmdId <= ID_VAULT_SWITCH_MAX) {
             size_t idx = static_cast<size_t>(cmdId - ID_VAULT_SWITCH_BASE);
             const auto* vault = m_vaultManager.GetVault(idx);
@@ -2371,6 +2381,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         m_vaultManager.SetConfigString(L"View", L"OutlineVisible", m_isOutlineVisible ? L"1" : L"0");
         m_vaultManager.SetConfigString(L"View", L"OutlineWidth", std::to_wstring(m_outlineWidth));
         m_vaultManager.SetConfigString(L"Window", L"AlwaysOnTop", m_isAlwaysOnTop ? L"1" : L"0");
+        m_vaultManager.SetConfigString(L"Editor", L"WordWrap", m_isWordWrap ? L"1" : L"0");
         KillTimer(m_hWnd, TIMER_OUTLINE_DEBOUNCE);
         KillTimer(m_hWnd, TIMER_AUTOSAVE_DEBOUNCE);
         if (m_db) {
@@ -3138,6 +3149,24 @@ void MainWindow::SetAlwaysOnTop(bool enable) {
 
 void MainWindow::ToggleAlwaysOnTop() {
     SetAlwaysOnTop(!m_isAlwaysOnTop);
+}
+
+void MainWindow::SetWordWrap(bool enable) {
+    m_isWordWrap = enable;
+    m_richEditView.SetWordWrap(enable);
+
+    HMENU hMenu = GetMenu(m_hWnd);
+    if (hMenu) {
+        CheckMenuItem(hMenu, ID_HELP_WORD_WRAP,
+            enable ? MF_CHECKED : MF_UNCHECKED);
+    }
+
+    UpdateStatusBar(enable ? L"已开启自动换行" : L"已关闭自动换行");
+    m_vaultManager.SetConfigString(L"Editor", L"WordWrap", enable ? L"1" : L"0");
+}
+
+void MainWindow::ToggleWordWrap() {
+    SetWordWrap(!m_isWordWrap);
 }
 
 } // namespace anynote::ui

@@ -143,6 +143,96 @@ int main() {
         outlinePane.SetOutlineItems({});
 
         std::cout << "[PASS] OutlinePane hierarchy building and sync navigation passed.\n";
+
+        // 3. 测试自动换行 (Word Wrap) 功能及正文/代码块/表格排他性
+        {
+            HWND hEdit = editor.GetHwnd();
+            // 验证默认状态与接口查询
+            editor.SetWordWrap(true);
+            Check(editor.IsWordWrap(), "IsWordWrap must return true after SetWordWrap(true)");
+
+            // (1) 正文测试：开启换行时自动折行，关闭换行时不折行
+            std::wstring longText = L"这是一个很长很长的正文测试段落。";
+            for (int i = 0; i < 15; ++i) {
+                longText += L"这是第" + std::to_wstring(i) + L"句用于测试自动折行的长内容，在窗口有限宽度下必须能够正常被自动换行。";
+            }
+            editor.SetText(longText);
+
+            LRESULT linesWrapOn = SendMessageW(hEdit, EM_GETLINECOUNT, 0, 0);
+            Check(linesWrapOn > 1, "Long text must wrap into multiple lines when WordWrap is ON");
+
+            editor.SetWordWrap(false);
+            Check(!editor.IsWordWrap(), "IsWordWrap must return false after SetWordWrap(false)");
+            LRESULT linesWrapOff = SendMessageW(hEdit, EM_GETLINECOUNT, 0, 0);
+            Check(linesWrapOff == 1, "Long text must stay in a single line when WordWrap is OFF");
+
+            // (2) 标题测试：标题同样适用自动换行
+            editor.SelectRange(0, static_cast<LONG>(longText.size()));
+            editor.ApplyHeading(1);
+            editor.SetWordWrap(true);
+            LRESULT h1WrapOn = SendMessageW(hEdit, EM_GETLINECOUNT, 0, 0);
+            Check(h1WrapOn > 1, "Heading 1 must wrap into multiple lines when WordWrap is ON");
+
+            editor.SetWordWrap(false);
+            LRESULT h1WrapOff = SendMessageW(hEdit, EM_GETLINECOUNT, 0, 0);
+            Check(h1WrapOff == 1, "Heading 1 must stay in a single line when WordWrap is OFF");
+
+            // (3) 代码块排他性测试：开启自动换行时，代码块内容坚决不折行
+            editor.SetWordWrap(true);
+            editor.SetText(L"Normal heading or text\n");
+            editor.SelectRange(23, 23);
+            std::wstring longCodeLine = L"const char* long_sql_query = \"SELECT id, name, description, created_at, updated_at FROM anynote_very_long_table_name_that_must_not_wrap_under_any_circumstances_in_code_block\";";
+            Check(editor.InsertCodeBlock(longCodeLine, anynote::common::CodeLanguage::Cpp), "InsertCodeBlock failed");
+
+            anynote::ui::CodeBlockInfo codeInfo;
+            Check(editor.GetCodeBlockAtCursor(&codeInfo), "Cannot get inserted code block");
+
+            // 检查代码行内的字符坐标：长单行代码的首尾字符应该处于同一行高度（Y 坐标相同）
+            POINT ptStart{}, ptLong{};
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptStart), static_cast<LPARAM>(codeInfo.codeStart + 5));
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptLong), static_cast<LPARAM>(codeInfo.codeStart + 120));
+            Check(ptStart.y == ptLong.y, "Code block line must NOT wrap even when WordWrap is ON");
+
+            // (3b) 代码块中文回退与超长 Tab 制表符排他性测试（避免字符猜测误差导致折行）
+            // 用例 A：120 个中文字符单行
+            editor.SetText(L"Header\n");
+            editor.SelectRange(7, 7);
+            std::wstring chineseComment = L"// ";
+            for (int i = 0; i < 120; ++i) chineseComment += L"中";
+            Check(editor.InsertCodeBlock(chineseComment, anynote::common::CodeLanguage::Cpp), "InsertCodeBlock chinese failed");
+            anynote::ui::CodeBlockInfo chineseInfo;
+            Check(editor.GetCodeBlockAtCursor(&chineseInfo), "Cannot get inserted chinese code block");
+            POINT ptZhStart{}, ptZhEnd{};
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptZhStart), static_cast<LPARAM>(chineseInfo.codeStart + 5));
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptZhEnd), static_cast<LPARAM>(chineseInfo.codeStart + 115));
+            Check(ptZhStart.y == ptZhEnd.y, "Code block with 120 Chinese characters must NOT wrap");
+
+            // 用例 B：含 40 个 Tab 的单行
+            editor.SetText(L"Header\n");
+            editor.SelectRange(7, 7);
+            std::wstring tabLine = L"int val = ";
+            for (int i = 0; i < 40; ++i) tabLine += L"\t";
+            tabLine += L"100;";
+            Check(editor.InsertCodeBlock(tabLine, anynote::common::CodeLanguage::Cpp), "InsertCodeBlock tab failed");
+            anynote::ui::CodeBlockInfo tabInfo;
+            Check(editor.GetCodeBlockAtCursor(&tabInfo), "Cannot get inserted tab code block");
+            POINT ptTabStart{}, ptTabEnd{};
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptTabStart), static_cast<LPARAM>(tabInfo.codeStart + 2));
+            SendMessageW(hEdit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&ptTabEnd), static_cast<LPARAM>(tabInfo.codeStart + tabLine.size() - 1));
+            Check(ptTabStart.y == ptTabEnd.y, "Code block with 40 tabs must NOT wrap");
+
+            // (4) 表格排他性测试：插入表格并验证切换不影响表格几何结构
+            editor.SetText(L"\n");
+            editor.SelectRange(0, 0);
+            Check(editor.InsertTable(2, 3), "InsertTable failed");
+            Check(editor.IsCursorInTable(), "Cursor should be inside table");
+            editor.SetWordWrap(false);
+            editor.SetWordWrap(true);
+            Check(editor.IsCursorInTable(), "Table structure preserved across WordWrap toggle");
+
+            std::cout << "[PASS] WordWrap toggle and code block / table exclusion tests passed.\n";
+        }
+
         std::cout << "[ALL OUTLINE TESTS PASSED SUCCESSFULLY!]\n";
 
     } catch (const std::exception& ex) {

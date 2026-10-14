@@ -13,6 +13,7 @@
 #include <fstream>
 #include <mutex>
 #include <cstdlib>
+#include <iostream>
 
 
 namespace anynote::ui {
@@ -418,7 +419,20 @@ bool RichEditView::Initialize(HWND hParent, int x, int y, int width, int height,
     });
 
     ApplyDefaultFormatting(true);
+    SetWordWrap(m_wordWrap);
     return true;
+}
+
+void RichEditView::SetWordWrap(bool enable) {
+    m_wordWrap = enable;
+    if (m_hWnd) {
+        SendMessageW(m_hWnd, EM_SETTARGETDEVICE, 0, enable ? 0 : 1);
+        m_layoutFormattingNeeded = true;
+        m_lastLayoutWidth = -1;
+        RefreshCodeBlockLayout();
+        UpdateHoverBarPosition();
+        InvalidateRect(m_hWnd, nullptr, TRUE);
+    }
 }
 
 void RichEditView::ApplyDefaultFormatting(bool allDocument) {
@@ -1002,6 +1016,8 @@ bool RichEditView::InsertCodeBlock(std::wstring_view codeContent, common::CodeLa
 
     if (ok) {
         m_hasCodeBlocks = true;
+        m_layoutFormattingNeeded = true;
+        RefreshCodeBlockLayout();
         CodeBlockInfo info;
         if (GetCodeBlockAt(crBefore.cpMin, &info) ||
             GetCodeBlockAt(crBefore.cpMin + 1, &info) ||
@@ -1324,7 +1340,73 @@ void RichEditView::RefreshCodeBlockLayout() {
         row->SetCellIndex(0);
         row->SetIndent(0);
         row->SetCellMargin(240);
-        row->SetCellWidth(width);
+
+        // 自动换行不适用于代码块：测量代码中最长单行的实际排版宽度（涵盖 Consolas、中文字体 fallback 及制表位 \tx480），
+        // 确保单元格宽度至少能完整容纳最长单行代码，避免长代码或中文注释、多 Tab 缩进被强行折行切断。
+        long maxLineWidthTwips = 0;
+        {
+            HDC hdc = GetDC(m_hWnd);
+            HFONT hCodeFont = nullptr;
+            HFONT hOldFont = nullptr;
+            const int fontHeight = -MulDiv(11, dpi, 72);
+            hCodeFont = CreateFontW(
+                fontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas"
+            );
+            if (hdc && hCodeFont) {
+                hOldFont = static_cast<HFONT>(SelectObject(hdc, hCodeFont));
+            }
+
+            // RichEdit 默认连续制表符间隔为 720 twips (0.5 inch)，按 720 twips 精确展开
+            const int tabStopPx = std::max(1, MulDiv(720, dpi, 1440));
+
+            size_t lineStart = 0;
+            const size_t textLen = info.codeText.size();
+            for (size_t i = 0; i <= textLen; ++i) {
+                if (i == textLen || info.codeText[i] == L'\r' || info.codeText[i] == L'\n') {
+                    if (i > lineStart) {
+                        const wchar_t* pLine = info.codeText.data() + lineStart;
+                        const int lineLen = static_cast<int>(i - lineStart);
+                        long lineTwips = 0;
+                        if (hdc && hCodeFont) {
+                            const DWORD extent = GetTabbedTextExtentW(hdc, pLine, lineLen, 1, &tabStopPx);
+                            const int widthPx = LOWORD(extent);
+                            lineTwips = MulDiv(widthPx, 1440, dpi);
+                        } else {
+                            // 保底估算（半角按 140 twips，全角/中文按 280 twips，Tab 按 720 twips）
+                            for (int k = 0; k < lineLen; ++k) {
+                                wchar_t c = pLine[k];
+                                if (c == L'\t') lineTwips += 720;
+                                else if (c >= 0x2e80 || c == 0x3000) lineTwips += 280;
+                                else lineTwips += 140;
+                            }
+                        }
+                        if (lineTwips > maxLineWidthTwips) {
+                            maxLineWidthTwips = lineTwips;
+                        }
+                    }
+                    if (i < textLen && info.codeText[i] == L'\r' && i + 1 < textLen && info.codeText[i + 1] == L'\n') {
+                        ++i;
+                    }
+                    lineStart = i + 1;
+                }
+            }
+
+            if (hdc) {
+                if (hOldFont) SelectObject(hdc, hOldFont);
+                ReleaseDC(m_hWnd, hdc);
+            }
+            if (hCodeFont) {
+                DeleteObject(hCodeFont);
+            }
+        }
+
+        // 加上左右 cell margin (240 + 240) 及边框/内边距裕量 (共 960 twips)
+        const long requiredCodeWidth = maxLineWidthTwips + 960;
+        const long cellWidth = std::max(width, requiredCodeWidth);
+
+        row->SetCellWidth(cellWidth);
         row->SetCellColorBack(RGB(246, 248, 250));
         row->SetCellShading(0);
         row->SetCellBorderColors(RGB(225, 228, 232), RGB(225, 228, 232),
